@@ -1,12 +1,22 @@
-CMakeLists.txt.user
-CMakeCache.txt
-CMakeFiles
-CMakeScripts
-Testing
-Makefile
-cmake_install.cmake
-install_manifest.txt
-compile_commands.json
-CTestTestfile.cmake
-_deps
-CMakeUserPresets.json
+# Exclude everything
+/*
+
+# Except for default project files
+!NDIlib_Send_Video_and_Audio.sln
+!.gitignore
+!LICENSE
+!README.md
+!/Include
+!/Lib
+!NDIlib_Send_Video_and_Audio.vcxproj
+!NDIlib_Send_Video_and_Audio.cpp
+!NDIlib_Send_Video_and_Audio.vcxproj*
+
+# Exclude lock files
+*.lock.json
+
+# Exclude macOS legacy resource forks
+.DS_Store
+
+# Exclude CMake build number cache
+/cmake/.CMakeBuildNumber
