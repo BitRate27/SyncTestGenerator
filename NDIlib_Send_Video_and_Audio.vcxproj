@@ -123,6 +123,7 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(SolutionDir)Lib\$(PlatformShortName)\</AdditionalLibraryDirectories>
+      <AdditionalDependencies>$(NDI_SDK_DIR)\Lib\$(LibrariesArchitecture)\Processing.NDI.Lib.$(LibrariesArchitecture).lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PreBuildEvent>
       <Command>

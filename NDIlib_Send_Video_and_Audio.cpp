@@ -47,6 +47,8 @@ void obs_sync_debug_log(const char *message, uint64_t timecode,
 }
 static std::atomic<bool> exit_loop(false);
 static void sigint_handler(int) { exit_loop = true; }
+enum class OutputType { Black, White, BW };
+
 int main(int argc, char *argv[]) {
   // Not required, but "correct" (see the SDK documentation).
   if (!NDIlib_initialize()) {
@@ -64,21 +66,44 @@ int main(int argc, char *argv[]) {
   int duration = 60;
   std::thread timer_thread;
 
+  OutputType output_type = OutputType::BW;
+
   // Parse command line arguments to find /duration=
   for (int i = 1; i < argc; ++i) {
-    if (strncmp(argv[i], "/duration=", 10) == 0) {
+    if (strncmp(argv[i], "-duration=", 10) == 0) {
       duration = std::atoi(argv[i] + 10);
       timer_thread = std::thread([duration]() {
         std::this_thread::sleep_for(std::chrono::seconds(duration));
         exit_loop = true;
       });
     }
+    else if (strncmp(argv[i], "-output=", 8) == 0) {
+        std::string output_arg = argv[i] + 8;
+        if (output_arg == "Black") {
+            output_type = OutputType::Black;
+        }
+        else if (output_arg == "White") {
+            output_type = OutputType::White;
+        }
+        else if (output_arg == "BW") {
+            output_type = OutputType::BW;
+        }
+    }
   }
 
-  // Create an NDI source that is called "My Video and Audio" and is clocked to
-  // the video.
   NDIlib_send_create_t NDI_send_create_desc;
-  NDI_send_create_desc.p_ndi_name = "Sync Test Sine BW";
+  switch (output_type) {
+  case OutputType::Black:
+      NDI_send_create_desc.p_ndi_name = "Sync Test Black";
+      break;
+  case OutputType::White:
+      NDI_send_create_desc.p_ndi_name = "Sync Test White";
+      break;
+  case OutputType::BW:
+  default:
+      NDI_send_create_desc.p_ndi_name = "Sync Test BW";
+      break;
+  }
 
   // We create the NDI sender
   NDIlib_send_instance_t pNDI_send = NDIlib_send_create(&NDI_send_create_desc);
@@ -112,9 +137,17 @@ int main(int argc, char *argv[]) {
 
   // We will send 1000 frames of video.
   for (int idx = 0; !exit_loop; idx++) {
-    // Display black ?
-    bool black = (idx % 50) > 10;
-    // black = false;
+      // Determine if the frame should be black or white based on the output type
+      bool black = false;
+      if (output_type == OutputType::BW) {
+          black = (idx % 50) > 10;
+      }
+      else if (output_type == OutputType::Black) {
+          black = true;
+      }
+      else if (output_type == OutputType::White) {
+          black = false;
+      }
     // Because we are clocking to the video it is better to always submit the
     // audio before, although there is very little in it. I'll leave it as an
     // exercises for the reader to work out why.

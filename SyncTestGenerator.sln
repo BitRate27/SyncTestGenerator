@@ -1,9 +1,9 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
-VisualStudioVersion = 17.11.35327.3
+VisualStudioVersion = 17.12.35527.113 d17.12
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "NDIlib_Send_Video_and_Audio", "NDIlib_Send_Video_and_Audio\NDIlib_Send_Video_and_Audio.vcxproj", "{6DA35780-7103-4F29-B8B4-84C5FF7137A2}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "NDIlib_Send_Video_and_Audio", "NDIlib_Send_Video_and_Audio.vcxproj", "{6DA35780-7103-4F29-B8B4-84C5FF7137A2}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -24,8 +24,5 @@ Global
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
-	EndGlobalSection
-	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {CE33D55E-F1F8-4473-BA0B-140055D179C0}
 	EndGlobalSection
 EndGlobal
