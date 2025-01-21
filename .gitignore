@@ -2,15 +2,18 @@
 /*
 
 # Except for default project files
-!SyncTestGenerator.sln
+!AVTestSyncSuite.sln
 !.gitignore
 !LICENSE
 !README.md
 !/Include
 !/Lib
 !NDIlib_Send_Video_and_Audio.vcxproj
-!NDIlib_Send_Video_and_Audio.cpp
+!SyncTestSend.cpp
 !NDIlib_Send_Video_and_Audio.vcxproj*
+!NDIlib_Recv_Framesync.vcxproj
+!SyncTestReceive.cpp
+!NDIlib_Recv_Framesync.vcxproj*
 
 # Exclude lock files
 *.lock.json

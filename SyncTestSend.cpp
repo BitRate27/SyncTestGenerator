@@ -22,28 +22,70 @@
 #pragma comment(lib, "Processing.NDI.Lib.x86.lib")
 #endif // _WIN64
 #endif
-static std::map<std::string, std::chrono::steady_clock::time_point> lastLogTime;
 
-// Function to log messages with a cooldown for each message
-void obs_sync_debug_log(const char *message, uint64_t timecode,
-                        uint64_t timestamp) {
+bool audio_on = false;
+int64_t audio_on_time;
+bool white_on = false;
+int64_t white_on_time;
 
-  auto now = std::chrono::steady_clock::now();
-
-  // Check if the number of strings in the map is <= 100
-  if (lastLogTime.size() <= 100) {
-
-    // Concatenate message and sourceName
-    std::string key = std::string(message);
-
-    auto it = lastLogTime.find(key);
-    if (it == lastLogTime.end() ||
-        std::chrono::duration_cast<std::chrono::seconds>(now - it->second)
-                .count() >= 1) {
-      printf("tc=%17lld ts=%17lld: %s\n", timecode, timestamp, key.c_str());
-      lastLogTime[key] = now;
+int64_t obs_sync_white_time(int64_t time, uint8_t* p_data)
+{
+    uint8_t pixel0 = p_data[0];
+    uint8_t pixel1 = p_data[1];
+    bool white = (((pixel0 == 128) && (pixel1 == 235)) || ((pixel0 == 255) && (pixel1 == 255)));
+    return white ? time : 0;
+}
+int64_t obs_sync_audio_time(int64_t time, float* p_data, int nsamples, int samplerate)
+{
+    int64_t return_time = 0;
+    int sample = 0;
+    while (sample < nsamples) {
+        float sample_amp = p_data[sample];
+        if (sample_amp != 0.0f) {
+            int64_t ns_per_sample = 1000000000 / samplerate;
+            return_time = time + sample * ns_per_sample;
+            float sample_amp_prev = 0.0f;
+            if (sample > 0)
+                sample_amp_prev = p_data[sample - 1];
+            return return_time;
+        }
+        sample++;
     }
-  }
+    return return_time;
+}
+
+void obs_sync_debug_log_video_time(const char* message, uint64_t timestamp, uint8_t* data)
+{
+
+    // If white frame is going from off to on, log the frame time, audio time and diff
+    int64_t white_time = obs_sync_white_time(timestamp, data);
+    if (!white_on && (white_time > 0)) {
+        white_on = true;
+        white_on_time = white_time;
+
+        int64_t diff = white_on_time - audio_on_time;
+
+        printf("~___~___ Sync Test Data Found: AT %14lld WT %14lld: %14lld %s\n",
+            audio_on_time / 1000000, white_on_time / 1000000, diff / 1000000, message);
+
+    }
+    else if (white_on && (white_time == 0)) {
+        white_on = false;
+    }
+}
+void obs_sync_debug_log_audio_time(const char* message, uint64_t timestamp, float* data, int no_samples,
+    int sample_rate)
+{
+
+    // If audio on, log the frame time
+    int64_t audio_time = obs_sync_audio_time(timestamp, data, no_samples, sample_rate);
+    if (!audio_on && (audio_time > 0)) {
+        audio_on = true; // set audio on
+        audio_on_time = audio_time;
+    }
+    else if (audio_on && (audio_time == 0)) {
+        audio_on = false;
+    }
 }
 static std::atomic<bool> exit_loop(false);
 static void sigint_handler(int) { exit_loop = true; }
@@ -104,6 +146,9 @@ int main(int argc, char *argv[]) {
       NDI_send_create_desc.p_ndi_name = "Sync Test BW";
       break;
   }
+
+  char message[256];
+  sprintf_s<256>(message, "NDI <- SyncTestSend [%s]", NDI_send_create_desc.p_ndi_name);
 
   // We create the NDI sender
   NDIlib_send_instance_t pNDI_send = NDIlib_send_create(&NDI_send_create_desc);
@@ -183,7 +228,9 @@ int main(int argc, char *argv[]) {
     NDI_audio_frame.timecode = now / 100;
     sine_sample += NDI_audio_frame.no_samples;
 
-    // Submit the audio buffer
+	// Log the audio time and audio frame
+    obs_sync_debug_log_audio_time(message, NDI_audio_frame.timecode, NDI_audio_frame.p_data, NDI_audio_frame.no_samples, NDI_audio_frame.sample_rate);
+
     NDIlib_send_send_audio_v2(pNDI_send, &NDI_audio_frame);
 
     // Every 50 frames display a few frames of while
@@ -194,10 +241,9 @@ int main(int argc, char *argv[]) {
     // end up submitting at exactly 29.97fps.
     NDI_video_frame.timecode = now / 100;
 
+	// Check if start of white frame and log the frame time, audio time and diff
+    obs_sync_debug_log_video_time(message, NDI_video_frame.timecode, NDI_video_frame.p_data);
     NDIlib_send_send_video_v2(pNDI_send, &NDI_video_frame);
-
-    // Just display something helpful
-    // printf("Frame number %d send.\n", idx);
   }
 
   timer_thread.join();
