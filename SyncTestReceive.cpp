@@ -43,6 +43,9 @@ int64_t obs_sync_audio_time(int64_t time, float* p_data, int nsamples, int sampl
 	return return_time;
 }
 
+static uint64_t last_audio_sync_time = 0;
+static uint64_t last_video_sync_time = 0;
+
 void obs_sync_debug_log_video_time(const char* message, uint64_t timestamp, uint8_t* data)
 {
 
@@ -53,10 +56,14 @@ void obs_sync_debug_log_video_time(const char* message, uint64_t timestamp, uint
 		white_on_time = white_time;
 
 		int64_t diff = white_on_time - audio_on_time;
-
-		printf("~___~___ Sync Test Data Found: AT %14lld WT %14lld: %14lld %s\n",
-			audio_on_time / 1000000, white_on_time / 1000000, diff / 1000000, message);
-
+		if ((abs(diff) / 1000000) < 80) {
+			printf("Video AT: %10lld WT: %10lld Delta: %5lld, Last: %lld %s\n",
+			       audio_on_time / 1000000, white_on_time / 1000000,
+			       diff / 1000000,
+			       (white_on_time - last_video_sync_time) / 1000000,
+			       message);
+		}			
+		last_video_sync_time = white_on_time;
 	}
 	else if (white_on && (white_time == 0)) {
 		white_on = false;
@@ -71,21 +78,33 @@ void obs_sync_debug_log_audio_time(const char* message, uint64_t timestamp, floa
 	if (!audio_on && (audio_time > 0)) {
 		audio_on = true; // set audio on
 		audio_on_time = audio_time;
+
+		int64_t diff = white_on_time - audio_on_time;
+		if ((abs(diff)/1000000) < 80)
+			printf("Audio AT: %10lld WT: %10lld Delta: %5lld, Last: %lld %s\n",
+				audio_on_time / 1000000, white_on_time / 1000000,
+				diff / 1000000,
+				(audio_on_time - last_audio_sync_time) / 1000000, message);
+		last_audio_sync_time = audio_on_time;
 	}
 	else if (audio_on && (audio_time == 0)) {
 		audio_on = false;
 	}
 }
+enum class SyncType { Code, Stamp };
 
 int main(int argc, char* argv[])
 {
 	// Default source name
 	const char* desired_source_name = "";
+	SyncType sync_type = SyncType::Code;
 
 	// Parse command line arguments
 	for (int i = 1; i < argc; ++i) {
 		if (strncmp(argv[i], "-source=", 8) == 0) {
 			desired_source_name = argv[i] + 8;
+		} else if (strcmp(argv[i], "-stamp") == 0) {
+			sync_type = SyncType::Stamp;
 		}
 	}
 
@@ -151,10 +170,17 @@ int main(int argc, char* argv[])
 	// Destroy the NDI finder. We needed to have access to the pointers to p_sources[0]
 	NDIlib_find_destroy(pNDI_find);
 
+	uint64_t last_timestamp = 0LL;
 	// Run for one minute
 	using namespace std::chrono;
 	for (const auto start = high_resolution_clock::now(); high_resolution_clock::now() - start < minutes(5);) {
-		// Using a frame-sync we can always get data which is the magic and it will adapt 
+	
+		// Get audio samples
+		NDIlib_audio_frame_v2_t audio_frame;
+		NDIlib_framesync_capture_audio(pNDI_framesync, &audio_frame,
+					       48000, 4, 1600);
+
+		// Using a frame-sync we can always get data which is the magic and it will adapt
 		// to the frame-rate that it is being called with.
 		NDIlib_video_frame_v2_t video_frame;
 		NDIlib_framesync_capture_video(pNDI_framesync, &video_frame);
@@ -164,24 +190,48 @@ int main(int argc, char* argv[])
 		// want to default to some video standard (NTSC or PAL) and there would be no way to know what
 		// your default image should be from an API level.
 		if (video_frame.p_data) {
-			obs_sync_debug_log_video_time(message, video_frame.timecode, video_frame.p_data);
+
+			int frame_time = 1000000000 / (video_frame.frame_rate_N/video_frame.frame_rate_D);
+			if ((sync_type == SyncType::Code
+					    ? video_frame.timecode * 100
+					    : video_frame.timestamp) >
+				last_timestamp + frame_time) {
+
+				obs_sync_debug_log_video_time(
+					message,
+					sync_type == SyncType::Code
+						? video_frame.timecode *
+								100
+						: video_frame.timestamp,
+					video_frame.p_data);
+
+				obs_sync_debug_log_audio_time(
+					message,
+					sync_type == SyncType::Code
+						? audio_frame.timecode *
+								100
+						: audio_frame.timestamp,
+					audio_frame.p_data,
+					audio_frame.no_samples,
+					audio_frame.sample_rate);
+
+				last_timestamp =
+					sync_type == SyncType::Code
+						? video_frame.timecode *
+								100
+						: video_frame.timestamp;
+
+			}
 		}
 
 		// Release the video. You could keep the frame if you want and release it later.
-		NDIlib_framesync_free_video(pNDI_framesync, &video_frame);
-
-		// Get audio samples
-		NDIlib_audio_frame_v2_t audio_frame;
-		NDIlib_framesync_capture_audio(pNDI_framesync, &audio_frame, 48000, 4, 1600);
-
-		obs_sync_debug_log_audio_time(message, audio_frame.timecode, audio_frame.p_data, audio_frame.no_samples, audio_frame.sample_rate);
-
-		// Release the video. You could keep the frame if you want and release it later.
 		NDIlib_framesync_free_audio(pNDI_framesync, &audio_frame);
+		// Release the video. You could keep the frame if you want and release it later.
+		NDIlib_framesync_free_video(pNDI_framesync, &video_frame);
 
 		// This is our clock. We are going to run at 30Hz and the frame-sync is smart enough to
 		// best adapt the video and audio to match that.
-		std::this_thread::sleep_for(milliseconds(33));
+		std::this_thread::sleep_for(milliseconds(10));
 	}
 
 	// Free the frame-sync
