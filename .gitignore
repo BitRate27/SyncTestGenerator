@@ -14,6 +14,13 @@
 !NDIlib_Recv_Framesync.vcxproj
 !SyncTestReceive.cpp
 !NDIlib_Recv_Framesync.vcxproj*
+!/PixelFormatConfigs
+!/ResolutionConfigs
+!/Test.ps1
+!*.cfg
+!/SyncTestSend.vcxproj
+!/SyncTestReceive.vcxproj
+
 
 # Exclude lock files
 *.lock.json

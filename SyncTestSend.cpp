@@ -13,7 +13,12 @@
 #include <string>
 #include <thread>
 #include <time.h>
-
+#include <json.hpp>
+#include <fstream>
+#include <iostream>
+#include <stdexcept>
+#include <windows.h>
+using json = nlohmann::json;
 #define M_PI 3.14159265358f
 
 #ifdef _WIN32
@@ -54,6 +59,24 @@ int64_t obs_sync_audio_time(int64_t time, float *p_data, int nsamples,
 	return return_time;
 }
 
+void get_black_and_white_color(int format, int &white, int &black)
+{
+	switch (format) {
+	case NDIlib_FourCC_type_UYVY:
+		white = (128 | (235 << 8));
+		black = (128 | (16 << 8));
+		break;
+	case NDIlib_FourCC_type_BGRA:
+	case NDIlib_FourCC_type_RGBA:
+	case NDIlib_FourCC_type_RGBX:
+	case NDIlib_FourCC_type_BGRX:
+		white = 0xFFFFFFFF; // Blue=255, Green=255, Red=255, Alpha=255
+		black = 0x000000FF; // Blue=0, Green=0, Red=0, Alpha=255
+		break;
+	default:
+		break;
+	}
+}
 void obs_sync_debug_log_video_time(const char *message, uint64_t timestamp,
 				   uint8_t *data)
 {
@@ -98,6 +121,13 @@ enum class AudioType { Zero, Peak, Spike };
 
 int main(int argc, char *argv[])
 {
+#ifdef _WIN32
+	_set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+
+	// Suppress abort, critical-error-handler, and system-error dialogs
+	SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX |
+		     SEM_NOALIGNMENTFAULTEXCEPT);
+#endif
 	// Not required, but "correct" (see the SDK documentation).
 	if (!NDIlib_initialize()) {
 		// Cannot run NDI. Most likely because the CPU is not sufficient (see SDK
@@ -118,6 +148,9 @@ int main(int argc, char *argv[])
 	AudioType audio_type = AudioType::Zero;
 	int video_delay = 0;
 	bool setcode = false;
+	std::string config_file;
+	int white_color = (128 | (235 << 8));
+	int black_color = (128 | (16 << 8));
 
 	// Parse command line arguments to find /duration=
 	for (int i = 1; i < argc; ++i) {
@@ -150,8 +183,68 @@ int main(int argc, char *argv[])
 			video_delay = std::atoi(argv[i] + 7);
 		} else if (strncmp(argv[i], "-setcode", 8) == 0) {
 			setcode = true;
+		} else if (strncmp(argv[i], "-config=", 8) == 0) {
+			config_file = argv[i] + 8;
 		}
 	}
+
+	int xres = 1920;
+	int yres = 1080;
+	int frame_rate_N = 30000;
+	int frame_rate_D = 1000;
+	int format = NDIlib_FourCC_type_UYVY;
+
+	// If a config file is specified, parse it
+	if (!config_file.empty()) {
+		try {
+			std::ifstream file(config_file);
+			if (!file.is_open()) {
+				throw std::runtime_error(
+					"Could not open config file: " +
+					config_file);
+			}
+
+			json config;
+			file >> config;
+
+			// Read xres and yres from the JSON file
+			if (config.contains("xres") &&
+			    config.contains("yres")) {
+				xres = config["xres"].get<int>();
+				yres = config["yres"].get<int>();
+			}
+			if (config.contains("frame_rate_N") &&
+			    config.contains("frame_rate_D")) {
+				frame_rate_N =
+					config["frame_rate_N"].get<int>();
+				frame_rate_D =
+					config["frame_rate_D"].get<int>();
+			}
+			if (config.contains("format")) {
+				format = config["format"].get<int>();
+			}
+		} catch (const std::exception &e) {
+			std::cerr << "Error reading config file: " << e.what()
+				  << std::endl;
+			return 1;
+		}
+	}
+
+	// Print the resolution for debugging
+	std::cout << "Video resolution: " << xres << "x" << yres << std::endl;
+	std::cout << "Frame rate: " << frame_rate_N << "/" << frame_rate_D
+		  << std::endl;
+	std::cout << "Format: " << format << std::endl;
+
+
+
+	get_black_and_white_color(format, white_color, black_color);
+
+	std::string config_name = "DefaultName"; // Fallback name
+	if (!config_file.empty() && config_file.find(".cfg") > 0) {
+		config_name = config_file.substr(0, config_file.find(".cfg"));
+	}
+	std::cout << "Config name: " << config_name.c_str() << std::endl;
 
 	NDIlib_send_create_t NDI_send_create_desc;
 	switch (output_type) {
@@ -164,8 +257,7 @@ int main(int argc, char *argv[])
 	case OutputType::BW:
 	default:
 		char name[256];
-		sprintf_s<256>(name, "Sync Test BW (%d)",
-			       video_delay);
+		sprintf_s<256>(name, "Sync Test BW (%s)", config_name.c_str());
 		NDI_send_create_desc.p_ndi_name = name;
 		break;
 	}
@@ -183,28 +275,30 @@ int main(int argc, char *argv[])
 
 	const int n_white = 30;
 	const int n_black = 60;
-	const int frame_rate = 30;
+	const int frame_rate = frame_rate_N / frame_rate_D;
 	const int audio_rate = 48000;
-	uint64_t frame_time = 1000000000 / frame_rate;	
+	uint64_t frame_time = 1000000000 / frame_rate;
 	const int audio_no_samples = audio_rate / frame_rate;
 
 	// We are going to create a 1920x1080 interlaced frame
 	NDIlib_video_frame_v2_t NDI_video_frame;
-	NDI_video_frame.frame_rate_N = frame_rate * 1000;
-	NDI_video_frame.frame_rate_D = 1000;
-	NDI_video_frame.xres = 1920;
-	NDI_video_frame.yres = 1080;
+	NDI_video_frame.frame_rate_N = frame_rate_N;
+	NDI_video_frame.frame_rate_D = frame_rate_D;
+	NDI_video_frame.xres = xres;
+	NDI_video_frame.yres = yres;
 	NDI_video_frame.FourCC = NDIlib_FourCC_type_UYVY;
-	NDI_video_frame.p_data = (uint8_t *)malloc(1920 * 1080 * 2);
-	NDI_video_frame.line_stride_in_bytes = 1920 * 2;
+	NDI_video_frame.p_data = (uint8_t *)malloc(xres * yres * 2);
+	NDI_video_frame.line_stride_in_bytes = xres * 2;
 
 	// Create an audio buffer
 	NDIlib_audio_frame_v2_t NDI_audio_frame;
 	NDI_audio_frame.sample_rate = audio_rate;
 	NDI_audio_frame.no_channels = 2;
 	NDI_audio_frame.no_samples = audio_no_samples;
-	NDI_audio_frame.p_data = (float *)malloc(sizeof(float) * audio_no_samples * 2);
-	NDI_audio_frame.channel_stride_in_bytes = sizeof(float) * audio_no_samples;
+	NDI_audio_frame.p_data =
+		(float *)malloc(sizeof(float) * audio_no_samples * 2);
+	NDI_audio_frame.channel_stride_in_bytes =
+		sizeof(float) * audio_no_samples;
 
 	int64_t sine_sample = 0;
 	bool last_white = false;
@@ -216,6 +310,7 @@ int main(int argc, char *argv[])
 	auto start_time = nanoseconds;
 	auto last_sync_time = start_time;
 
+
 	// We will send 1000 frames of video.
 	for (int idx = 0; !exit_loop; idx++) {
 		// Determine if the frame should be black or white based on the output type
@@ -223,7 +318,8 @@ int main(int argc, char *argv[])
 		bool sound = false;
 
 		if (output_type == OutputType::BW) {
-			white = ((idx - video_delay) % (n_black + n_white)) < n_white;
+			white = ((idx - video_delay) % (n_black + n_white)) <
+				n_white;
 			sound = (idx % (n_black + n_white)) < n_white;
 		} else if (output_type == OutputType::Black) {
 			white = false;
@@ -241,7 +337,7 @@ int main(int argc, char *argv[])
 		if (!last_sound && sound) {
 			sine_sample = 0;
 		}
-	
+
 		// When sound, fill in a 400hz sine wave or a spike at the beginning of the audio frame
 		for (int ch = 0; ch < 2; ch++) {
 			// Get the pointer to the start of this channel
@@ -250,7 +346,6 @@ int main(int argc, char *argv[])
 					  ch * NDI_audio_frame
 							  .channel_stride_in_bytes);
 
-			
 			if ((audio_type == AudioType::Zero) ||
 			    (audio_type == AudioType::Peak)) {
 
@@ -261,12 +356,12 @@ int main(int argc, char *argv[])
 						     ? 2.0f
 						     : 1.0f;
 				for (int sample_no = 0;
-					 sample_no < NDI_audio_frame.no_samples;
-					 sample_no++) {
-					float time =
-						(sine_sample + sample_no) / sample_rate;
-					float sample =
-						sin(sine * M_PI * frequency * time);
+				     sample_no < NDI_audio_frame.no_samples;
+				     sample_no++) {
+					float time = (sine_sample + sample_no) /
+						     sample_rate;
+					float sample = sin(sine * M_PI *
+							   frequency * time);
 					if (sample == 0.0f)
 						sample =
 							1.0E-10f; // Make sure we never have a zero sample value
@@ -288,13 +383,15 @@ int main(int argc, char *argv[])
 			}
 
 			last_sound = sound;
-		}			
-		
+		}
+
 		last_white = white;
 
 		NDI_audio_frame.timestamp = start_time + (idx * frame_time);
 		NDI_audio_frame.timecode = NDIlib_send_timecode_synthesize;
-		if (setcode) NDI_audio_frame.timecode = NDI_audio_frame.timestamp / 100;
+		if (setcode)
+			NDI_audio_frame.timecode =
+				NDI_audio_frame.timestamp / 100;
 
 		sine_sample += NDI_audio_frame.no_samples;
 
@@ -308,12 +405,15 @@ int main(int argc, char *argv[])
 		NDIlib_send_send_audio_v2(pNDI_send, &NDI_audio_frame);
 
 		// Every 50 frames display a few frames of white
-		std::fill_n((uint16_t *)NDI_video_frame.p_data, 1920 * 1080,
-			    !white ? (128 | (16 << 8)) : (128 | (235 << 8)));
+		std::fill_n((uint16_t *)NDI_video_frame.p_data, xres * yres,
+			    white ? white_color : black_color);
 
 		NDI_video_frame.timecode = NDIlib_send_timecode_synthesize;
-		NDI_video_frame.timestamp = start_time + ((idx - video_delay) * frame_time);
-		if (setcode) NDI_video_frame.timecode = NDI_video_frame.timestamp / 100;
+		NDI_video_frame.timestamp =
+			start_time + ((idx - video_delay) * frame_time);
+		if (setcode)
+			NDI_video_frame.timecode =
+				NDI_video_frame.timestamp / 100;
 
 		// Check if start of white frame and log the frame time, audio time and diff
 		obs_sync_debug_log_video_time(message,
