@@ -401,7 +401,8 @@ std::pair<double, double> ComputeWhiteShift(const RGBImage &imgA,
 	int h = imgA.height;
 	size_t total = static_cast<size_t>(w) * static_cast<size_t>(h);
 
-	if ((x0 + sx > w) || (y0 + sy > h)) {
+	if (((x0 - (sx/2)) < 0) || ((x0 + (sx/2)) >= w) || 
+		((y0 - (sy/2)) < 0) || ((y0 + (sy/2)) >= h)) {
 		std::cerr << "Sub range is not in range of image size"
 			  << std::endl;
 	}
@@ -409,9 +410,9 @@ std::pair<double, double> ComputeWhiteShift(const RGBImage &imgA,
 	double sumAx = 0.0, sumAy = 0.0;
 	double sumBx = 0.0, sumBy = 0.0;
 	size_t countA = 0, countB = 0;
-
-	for (int x = x0; x < x0 + sx; x++) {
-		for (int y = y0; y < y0 + sy; y++) {
+  
+	for (int x = x0 - (sx/2); x < x0 + (sx/2); x++) {
+		for (int y = y0 - (sy/2); y < y0 + (sy/2); y++) {
 			const uint8_t *a = imgA.getPixel(x, y);
 			const uint8_t *b = imgB.getPixel(x, y);
 
@@ -516,6 +517,10 @@ int main(int argc, char *argv[])
 
 		RGBImage prevImg;
 		bool havePrev = false;
+
+		double startx = 2471.;
+		double starty = 2591.;
+
 		for (const auto &f : files) {
 			try {
 				std::cout << "Loading: " << f << std::endl;
@@ -524,12 +529,14 @@ int main(int argc, char *argv[])
 
 				if (havePrev) {
 					// Calculate shift using phase correlation
-					auto shift = ComputeWhiteShift(prevImg, img, 2600, 2450, 300, 300);
+					auto shift = ComputeWhiteShift(prevImg, img, (int)startx, (int)starty, 300, 300);
 
 					std::cout << "Image shift detected:";
 					std::cout << "  dx: " << shift.first;
 					std::cout << "  dy: " << shift.second
 						  << std::endl;
+					startx +=  shift.first;
+					starty +=  shift.second;
 				}
 
 				prevImg = std::move(img);
