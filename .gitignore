@@ -20,7 +20,7 @@
 !*.cfg
 !/SyncTestSend.vcxproj
 !/SyncTestReceive.vcxproj
-
+!/ImageExtractor
 
 # Exclude lock files
 *.lock.json
