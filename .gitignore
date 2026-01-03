@@ -30,3 +30,14 @@
 
 # Exclude CMake build number cache
 /cmake/.CMakeBuildNumber
+ImageExtractor/x64/Debug/CR3toRGBImage.obj
+ImageExtractor/x64/Debug/ImageExtractor.ilk
+ImageExtractor/x64/Debug/RGBImage.obj
+ImageExtractor/x64/Debug/RGBHistogram.obj
+ImageExtractor/x64/Debug/ImageExtractor.obj
+ImageExtractor/x64/Debug/ImageExtractor.log
+ImageExtractor/x64/Debug/CR3toRGBImage.obj
+ImageExtractor/x64/Debug/CR3toRGBImage.obj
+ImageExtractor/x64/Debug/ImageExtractor.log
+ImageExtractor/x64/Debug/ImageExtractor.obj
+ImageExtractor/x64/Debug/RGBImage.obj

@@ -9,7 +9,8 @@
 #include <shlwapi.h>
 #include <cmath>
 #include <algorithm>
-#include "PhaseCorrelation.h"
+#include "StackedImage.h"
+
 #pragma comment(lib, "mfreadwrite.lib")
 #pragma comment(lib, "mfplat.lib")
 #pragma comment(lib, "mfuuid.lib")
@@ -383,8 +384,8 @@ bool ExtractMP4Frames(const std::string &mp4Filename)
 // Returns pair(dx, dy) where dx = centerB.x - centerA.x, dy = centerB.y - centerA.y
 // A pixel is considered "white" when max(R,G,B) >= whiteThreshold (16-bit value).
 // If images have different sizes or no white pixels found in either image, (0,0) is returned.
-std::pair<double, double> ComputeWhiteShift(const RGBImage &imgA,
-				      const RGBImage &imgB,
+std::pair<double, double> ComputeWhiteShift(RGBImage &imgA,
+				      RGBImage &imgB,
 					  const int x0,
 					  const int y0,
 					  const int sx,
@@ -413,8 +414,8 @@ std::pair<double, double> ComputeWhiteShift(const RGBImage &imgA,
   
 	for (int x = x0 - (sx/2); x < x0 + (sx/2); x++) {
 		for (int y = y0 - (sy/2); y < y0 + (sy/2); y++) {
-			const uint8_t *a = imgA.getPixel(x, y);
-			const uint8_t *b = imgB.getPixel(x, y);
+			uint8_t *a = imgA.getPixel(x, y);
+			uint8_t *b = imgB.getPixel(x, y);
 
 			uint8_t ar = a[0];
 			uint8_t ag = a[1];
@@ -521,22 +522,65 @@ int main(int argc, char *argv[])
 		double startx = 2471.;
 		double starty = 2591.;
 
+		double thisx = startx;
+		double thisy = starty;
+
+		StackedImage stackedImg;
+
+		// Find out total shift of all files
 		for (const auto &f : files) {
 			try {
 				std::cout << "Loading: " << f << std::endl;
 				RGBImage img = readCR3File(f);
+
+			
 				std::cout << "Loaded: " << f << " (" << img.width << "x" << img.height << ")" << std::endl;
+
 
 				if (havePrev) {
 					// Calculate shift using phase correlation
-					auto shift = ComputeWhiteShift(prevImg, img, (int)startx, (int)starty, 300, 300);
+					auto shift = ComputeWhiteShift(prevImg, img, (int)thisx, (int)thisy, 300, 300);
 
 					std::cout << "Image shift detected:";
 					std::cout << "  dx: " << shift.first;
 					std::cout << "  dy: " << shift.second
 						  << std::endl;
-					startx +=  shift.first;
-					starty +=  shift.second;
+					thisx += shift.first;
+					thisy += shift.second;
+
+				
+				} 
+
+				RGBImage croppedImg = img.crop((int)thisx - 30,
+							    (int)thisy - 30,
+							    (int)thisx + 30,
+							    (int)thisy + 30);
+
+				stackedImg.addLayer(croppedImg);
+
+				// Save the cropped image into the inputPath folder with suffix ".cropped.bmp"
+				try {
+					std::string baseName =
+						GetFilenameWithoutExtension(f);
+					std::string outPath = inputPath;
+					if (!outPath.empty() &&
+					    outPath.back() != '\\' &&
+					    outPath.back() != '/')
+						outPath += "\\";
+					outPath += baseName + ".cropped.bmp";
+					if (!SaveRGBImageAsBMP(outPath, croppedImg)) {
+						std::cerr
+							<< "Error saving cropped image: "
+							<< outPath << std::endl;
+					} else {
+						std::cout
+							<< "Saved cropped image: "
+							<< outPath << std::endl;
+					}
+				} catch (const std::exception &e) {
+					std::cerr
+						<< "Failed to save cropped image: "
+						<< e.what() << std::endl;
 				}
 
 				prevImg = std::move(img);
@@ -545,6 +589,30 @@ int main(int argc, char *argv[])
 				std::cerr << "Failed to load CR3 '" << f << "': " << e.what() << std::endl;
 				// continue processing other files
 			}
+		}
+
+		std::cout << "Total image shift:";
+					std::cout << "  dx: " << thisx - startx;
+					std::cout << "  dy: " << thisy - starty
+						  << std::endl;
+
+		RGBImage peakImg =
+			stackedImg.getPeakImage();
+
+		// Save peak image to the input directory
+		std::string peakPath;
+		if (!inputPath.empty() && (inputPath.back() == '\\' || inputPath.back() == '/')) {
+			peakPath = inputPath + "peak_image.bmp";
+		} else if (!inputPath.empty()) {
+			peakPath = inputPath + "\\peak_image.bmp";
+		} else {
+			peakPath = "peak_image.bmp";
+		}
+
+		if (!SaveRGBImageAsBMP(peakPath, peakImg)) {
+			std::cerr << "Error saving peak image: " << peakPath << std::endl;
+		} else {
+			std::cout << "Saved peak image: " << peakPath << std::endl;
 		}
 
 		return 0;
