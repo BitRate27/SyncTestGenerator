@@ -27,18 +27,12 @@
     <ClCompile Include="StackedImage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="RGBHistogram.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="RGBImage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="StackedImage.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="RGBHistogram.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="RGBPixel.h">

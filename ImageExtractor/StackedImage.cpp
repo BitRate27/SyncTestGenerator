@@ -75,7 +75,7 @@ RGB8Pixel StackedImage::getPeakPixel(int x, int y)
 			peakB = static_cast<uint8_t>(i);
 		}
 	}
-	if (maxRedCount > 5 || maxGreenCount > 5 || maxBlueCount > 5) {
+	if (maxRedCount > 10 || maxGreenCount > 10 || maxBlueCount > 10) {
 		return RGB8Pixel{peakR, peakG, peakB};
 	}
 	return RGB8Pixel{0, 0, 0};

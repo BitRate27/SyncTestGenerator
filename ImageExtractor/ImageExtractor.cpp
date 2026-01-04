@@ -519,8 +519,8 @@ int main(int argc, char *argv[])
 		RGBImage prevImg;
 		bool havePrev = false;
 
-		double startx = 2471.;
-		double starty = 2591.;
+		double startx = 727.;
+		double starty = 1226.;
 
 		double thisx = startx;
 		double thisy = starty;
@@ -551,10 +551,10 @@ int main(int argc, char *argv[])
 				
 				} 
 
-				RGBImage croppedImg = img.crop((int)thisx - 30,
-							    (int)thisy - 30,
-							    (int)thisx + 30,
-							    (int)thisy + 30);
+				RGBImage croppedImg = img.crop((int)thisx - 300,
+							    (int)thisy - 300,
+							    (int)thisx + 300,
+							    (int)thisy + 300);
 
 				stackedImg.addLayer(croppedImg);
 

@@ -3,7 +3,6 @@
 #include <vector>
 #include <string>
 #include "RGBImage.h"
-#include "RGBHistogram.h"
 #include "RGBPixel.h"
 
 class StackedImage {

@@ -124,13 +124,11 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="CR3toRGBImage.cpp" />
-    <ClCompile Include="RGBHistogram.cpp" />
     <ClCompile Include="ImageExtractor.cpp" />
     <ClCompile Include="RGBImage.cpp" />
     <ClCompile Include="StackedImage.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="RGBHistogram.h" />
     <ClInclude Include="RGBImage.h" />
     <ClInclude Include="RGBPixel.h" />
     <ClInclude Include="StackedImage.h" />

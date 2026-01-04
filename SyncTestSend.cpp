@@ -38,6 +38,8 @@ int64_t obs_sync_white_time(int64_t time, uint8_t *p_data)
 {
 	uint8_t pixel0 = p_data[0];
 	uint8_t pixel1 = p_data[1];
+	uint8_t pixel2 = p_data[2];
+	uint8_t pixel3 = p_data[3];
 	bool white = (((pixel0 == 128) && (pixel1 == 235)) ||
 		      ((pixel0 == 255) && (pixel1 == 255)));
 	return white ? time : 0;
@@ -478,7 +480,7 @@ int main(int argc, char *argv[])
 			const float frequency =400.0f;
 			const float sample_rate_f = (float)audio_rate;
 			float sine =2.0f; // amplitude
-			for (int sample_no =0; sample_no < NDI_audio_frame.no_samples; sample_no++) {
+			for (int sample_no = 0; sample_no < NDI_audio_frame.no_samples; sample_no++) {
 				float time = (sine_sample + sample_no) / sample_rate_f;
 				float sample = sinf(sine * M_PI * frequency * time);
 				if (sample ==0.0f) sample =1.0E-10f;
@@ -486,7 +488,10 @@ int main(int argc, char *argv[])
 			}
 			last_sound = sound;
 		}
-
+		if (white && !last_white) {
+			// Reset sine sample on white frame transition
+			sine_sample =0;
+		}
 		last_white = white;
 
 		NDI_audio_frame.timestamp = (ntp_time + (idx * frame_time))/100;
@@ -501,14 +506,22 @@ int main(int argc, char *argv[])
 
 		// Fill video buffer according to format
 		if (f == NDIlib_FourCC_type_UYVY) {
-			//16-bit UYVY packed
-			uint8_t v =
-				(uint8_t)(white ? (uint8_t)(white_color &
-								    0xFFFF)
-							: (uint8_t)(black_color &
-								    0xFFFF));
-			std::fill_n((uint8_t *)NDI_video_frame.p_data,
-					(size_t)xres * (size_t)yres, v);
+			// UYVY packed8-bit: memory layout per2 pixels: U0 Y0 V0 Y1
+			uint8_t U = static_cast<uint8_t>((white ? white_color : black_color) &0xFF);
+			uint8_t Yv = static_cast<uint8_t>(((white ? white_color : black_color) >>8) &0xFF);
+			uint8_t V = U; // neutral chroma
+			// fill row by row
+			uint8_t *p = (uint8_t *)NDI_video_frame.p_data;
+			for (int row =0; row < yres; ++row) {
+				uint8_t *rowPtr = p + (size_t)row * line_stride;
+				for (int x =0; x < xres; x +=2) {
+					size_t idx = (size_t)x *2; //2 bytes per pixel
+					rowPtr[idx +0] = U; // U0
+					rowPtr[idx +1] = Yv; // Y0
+					rowPtr[idx +2] = V; // V0
+					rowPtr[idx +3] = Yv; // Y1
+				}
+			}
 		} else if (f == NDIlib_FourCC_type_UYVA) {
 			// UYVY plane then alpha plane
 			uint8_t v =
