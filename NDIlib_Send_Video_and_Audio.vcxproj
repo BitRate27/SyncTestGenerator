@@ -182,6 +182,7 @@
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="AccurateNTP.cpp" />
     <ClCompile Include="GetNTPTime.cpp" />
     <ClCompile Include="SyncTestSend.cpp" />
   </ItemGroup>

@@ -18,9 +18,11 @@
 #include <iostream>
 #include <stdexcept>
 #include <windows.h>
+uint64_t getAccurateNetworkTime(const std::string &ntpServer,
+				int port);
 using json = nlohmann::json;
 #define M_PI 3.14159265358f
-
+uint64_t getNTPTime(const std::string &ntpServer, int port);
 #ifdef _WIN32
 #ifdef _WIN64
 #pragma comment(lib, "Processing.NDI.Lib.x64.lib")
@@ -117,9 +119,9 @@ void obs_sync_debug_log_video_time(const char *message, uint64_t timestamp,
 
 		int64_t diff = white_on_time - audio_on_time;
 
-		printf("AT %14lld WT %14lld: %14lld %s\n",
-		       audio_on_time / 1000000, white_on_time / 1000000,
-		       diff / 1000000, message);
+		printf("AT %17lld WT %17lld: %17lld %s\n",
+		       audio_on_time / 1000, white_on_time / 1000,
+		       diff / 1000, message);
 
 	} else if (white_on && (white_time == 0)) {
 		white_on = false;
@@ -175,7 +177,6 @@ int main(int argc, char *argv[])
 	bool timer_thread_started = false;
 
 	OutputType output_type = OutputType::BW;
-	int video_delay = 0;
 	bool setcode = false;
 	bool send_no_connection = false;
 	std::string config_file;
@@ -201,8 +202,6 @@ int main(int argc, char *argv[])
 			} else if (output_arg == "BW") {
 				output_type = OutputType::BW;
 			}
-		} else if (strncmp(argv[i], "-delay=", 7) == 0) {
-			video_delay = std::atoi(argv[i] + 7);
 		} else if (strncmp(argv[i], "-setcode", 8) == 0) {
 			setcode = true;
 		} else if (strncmp(argv[i], "-sendnoconn", 10) == 0) {
@@ -284,7 +283,7 @@ int main(int argc, char *argv[])
 	const int n_black = 60;
 	const int frame_rate = frame_rate_N / frame_rate_D;
 	const int audio_rate = 48000;
-	uint64_t frame_time = 1000000000 / frame_rate;
+
 	const int audio_no_samples = audio_rate / frame_rate;
 
 	// We are going to create a video frame
@@ -340,17 +339,18 @@ int main(int argc, char *argv[])
 	bool last_sound = false;
 	struct timespec ts;
 
-
-
-
 	timespec_get(&ts, TIME_UTC);
 	long long nanoseconds = (long long)ts.tv_sec *1000000000LL + ts.tv_nsec;
+
+	uint64_t frame_time = (uint64_t)(1000000000ULL * frame_rate_D / frame_rate_N);
+
 	auto start_time = nanoseconds;
 	auto last_sync_time = start_time;
 
 	// Print the resolution for debugging
 	std::cout << "Video resolution: " << xres << "x" << yres << std::endl;
 	std::cout << "Frame rate: " << frame_rate_N << "/" << frame_rate_D << std::endl;
+	std::cout << "Frame time (ns): " << frame_time << std::endl;	
 	std::cout << "Format: " << format << std::endl;
 	std::cout << "Audio no samples: " << audio_no_samples << std::endl;
 	std::cout << "Command line parameters:";
@@ -395,20 +395,14 @@ int main(int argc, char *argv[])
 	std::cout << "Waiting for connection on "
 		  << NDI_send_create_desc.p_ndi_name << "..." << std::endl;
 
-	// force ntp_time to be the next millisecond
-	auto ntp_time = getNTPTimeNanoseconds("pool.ntp.org",123);
-	// Round up to the next whole second (strictly greater than the current time)
-	if (ntp_time >=0) {
-		int64_t sec =1000000000LL;
-		ntp_time = ((ntp_time / sec) +1) * sec;
-	} else {
-		// If negative (shouldn't happen), still normalize to next second
-		int64_t sec =1000000000LL;
-		ntp_time = ((ntp_time / sec) +1) * sec;
-	}
-	
+	uint64_t ntp_time = getAccurateNetworkTime("pool.ntp.org",123);
+
 	// We will send video frames until exit
 	for (int idx =0; !exit_loop; idx++) {
+		timespec_get(&ts, TIME_UTC);
+		long long start_loop_time =
+			(long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+
 		if (!send_no_connection) { 
 			// Periodically (every500 ms) check the number of connections. If zero, skip sending.
 			auto now_check = std::chrono::steady_clock::now();
@@ -443,21 +437,23 @@ int main(int argc, char *argv[])
 		bool white = false;
 		bool sound = false;
 
-		if (output_type == OutputType::BW) {
-			// Compute time offset since ntp_time, applying video_delay (in frames)
-			int64_t adj_idx = static_cast<int64_t>(idx) - static_cast<int64_t>(video_delay);
-			int64_t offset_ns_signed = adj_idx * static_cast<int64_t>(frame_time);
-			uint64_t offset_ns =0;
-			if (offset_ns_signed >0)
-				offset_ns = static_cast<uint64_t>(offset_ns_signed);
-			else
-				offset_ns =0;
+		uint64_t frame_ns = ntp_time + (idx * frame_time);
 
-			//4-second cycle: white for first1 second, then black for3 seconds
-			const uint64_t cycle_ns =4000000000ULL; //4 seconds in ns
-			const uint64_t white_ns =1000000000ULL; //1 second in ns
-			uint64_t pos = offset_ns % cycle_ns;
-			white = (pos < white_ns);
+		if (output_type == OutputType::BW) {
+
+			const uint64_t ms = 1000000ULL; // 1 ms = 1,000,000 ns
+			uint64_t ms_since_epoch =
+				frame_ns / ms; // milliseconds since epoch
+			const uint64_t cycle_ms =
+				4000ULL; // 4 second cycle in ms
+			const uint64_t white_ms =
+				1000ULL; // 1 second white duration in ms
+			uint64_t pos_ms =
+				ms_since_epoch %
+				cycle_ms; // position inside the 4s cycle
+
+			white = (pos_ms < white_ms);
+
 			// Make audio follow the white interval as well
 			sound = white;
 		} else if (output_type == OutputType::Black) {
@@ -489,12 +485,10 @@ int main(int argc, char *argv[])
 			last_sound = sound;
 		}
 		if (white && !last_white) {
-			// Reset sine sample on white frame transition
-			sine_sample =0;
+			int nnn = 0;
 		}
-		last_white = white;
-
-		NDI_audio_frame.timestamp = (ntp_time + (idx * frame_time))/100;
+		
+		NDI_audio_frame.timestamp = frame_ns / 100;
 		NDI_audio_frame.timecode = NDIlib_send_timecode_synthesize;
 		if (setcode) NDI_audio_frame.timecode = (nanoseconds + (idx * frame_time))/100;
 		sine_sample += NDI_audio_frame.no_samples;
@@ -546,8 +540,7 @@ int main(int argc, char *argv[])
 					(size_t)xres * (size_t)yres, v);
 		}
 		
-		NDI_video_frame.timestamp =
-			(ntp_time + (idx * frame_time)) / 100;
+		NDI_video_frame.timestamp = frame_ns / 100;
 		NDI_video_frame.timecode = NDIlib_send_timecode_synthesize;
 		if (setcode)
 			NDI_video_frame.timecode =
@@ -556,6 +549,24 @@ int main(int argc, char *argv[])
 		// Check if start of white frame and log the frame time, audio time and diff
 		obs_sync_debug_log_video_time(message, NDI_video_frame.timestamp, NDI_video_frame.p_data);
 		NDIlib_send_send_video_v2(pNDI_send, &NDI_video_frame);
+
+		if (!last_white && white) {
+			int nnn = 0;
+		}
+		last_white = white;
+
+		/*
+		timespec_get(&ts, TIME_UTC);
+		long long end_loop_time =
+			(long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+		
+		long long sleep_time =
+			frame_time - (end_loop_time - start_loop_time);
+		// std::this_thread::sleep_for(std::chrono::nanoseconds(sleep_time));
+
+		printf("End of Loop %d: sleep_time %14lld, timestamp %14lld\n",
+		       idx, sleep_time, NDI_video_frame.timestamp);
+		*/
 	}
 
 	if (timer_thread_started) {

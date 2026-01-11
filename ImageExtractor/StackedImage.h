@@ -19,6 +19,7 @@ public:
 	int pixelsize;
 	int ncolorvalues;
 	int ncolors;
+	bool stacked = false;
 
 	RGB8Pixel getPeakPixel(int x, int y);
 	bool addLayer(RGBImage &layerImg);

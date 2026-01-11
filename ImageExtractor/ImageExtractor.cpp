@@ -16,8 +16,8 @@
 #pragma comment(lib, "mfuuid.lib")
 #pragma comment(lib, "shlwapi.lib")
 
-// forward declaration for CR3 reader implemented in CR3toRGBImage.cpp
 RGBImage readCR3File(const std::string &filename);
+RGBImage readJPEGFile(const std::string &filename);
 
 // Helper function to check if file exists
 bool FileExists(const std::string &filename)
@@ -390,7 +390,7 @@ std::pair<double, double> ComputeWhiteShift(RGBImage &imgA,
 					  const int y0,
 					  const int sx,
 	                  const int sy,
-				      uint8_t whiteThreshold = 200)
+				      uint8_t whiteThreshold = 20)
 {
 	if (imgA.width != imgB.width || imgA.height != imgB.height) {
 		std::cerr << "ComputeWhiteShift: image sizes differ"
@@ -427,7 +427,7 @@ std::pair<double, double> ComputeWhiteShift(RGBImage &imgA,
 			// Consider pixel white only if all channels are >= threshold
 			if (ar >= whiteThreshold && ag >= whiteThreshold &&
 			    ab >= whiteThreshold) {
-				sumAx += x;
+				sumAx += x ;
 				sumAy += y;
 				++countA;
 			}
@@ -502,7 +502,11 @@ int main(int argc, char *argv[])
 					full += "\\";
 				full += findData.cFileName;
 				// filter by extension case-insensitively
-				if (GetExtensionLowercase(full) == ".cr3") {
+				if ((GetExtensionLowercase(full) == ".cr3") ||
+				    (GetExtensionLowercase(full) ==
+				     ".jpg") ||
+				    (GetExtensionLowercase(full) ==
+				     ".jpeg")) {
 					files.push_back(full);
 				}
 			}
@@ -510,7 +514,7 @@ int main(int argc, char *argv[])
 		FindClose(hFind);
 
 		if (files.empty()) {
-			std::cerr << "No .cr3 files found in folder: " << inputPath << std::endl;
+			std::cerr << "No .cr3 or .jpg files found in folder: " << inputPath << std::endl;
 			return 1;
 		}
 
@@ -519,8 +523,8 @@ int main(int argc, char *argv[])
 		RGBImage prevImg;
 		bool havePrev = false;
 
-		double startx = 727.;
-		double starty = 1226.;
+		double startx = 1793.;
+		double starty = 1562.;
 
 		double thisx = startx;
 		double thisy = starty;
@@ -531,11 +535,16 @@ int main(int argc, char *argv[])
 		for (const auto &f : files) {
 			try {
 				std::cout << "Loading: " << f << std::endl;
-				RGBImage img = readCR3File(f);
+				RGBImage img;
 
+				if (GetExtensionLowercase(f) == ".cr3") {
+					img = readCR3File(f);
+				} else {
+					stackedImg.stacked = true;
+					img = readJPEGFile(f);
+				}
 			
 				std::cout << "Loaded: " << f << " (" << img.width << "x" << img.height << ")" << std::endl;
-
 
 				if (havePrev) {
 					// Calculate shift using phase correlation
@@ -556,7 +565,7 @@ int main(int argc, char *argv[])
 							    (int)thisx + 300,
 							    (int)thisy + 300);
 
-				stackedImg.addLayer(croppedImg);
+				stackedImg.addLayer(img);
 
 				// Save the cropped image into the inputPath folder with suffix ".cropped.bmp"
 				try {
@@ -591,6 +600,8 @@ int main(int argc, char *argv[])
 			}
 		}
 
+		std::cout << "Layers stacked: " << stackedImg.layers
+			  << std::endl;
 		std::cout << "Total image shift:";
 					std::cout << "  dx: " << thisx - startx;
 					std::cout << "  dy: " << thisy - starty

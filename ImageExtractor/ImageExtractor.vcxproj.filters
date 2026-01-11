@@ -27,6 +27,12 @@
     <ClCompile Include="StackedImage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="JPGtoRGBImage.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ImageHelper.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="RGBImage.h">
@@ -36,6 +42,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="RGBPixel.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ImageHelper.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

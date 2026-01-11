@@ -40,6 +40,9 @@ void StackedImage::clear()
 	ncolors =0;
 }
 
+uint8_t linearInterpolate(uint16_t max, uint16_t t) {
+	return static_cast<uint8_t>(((float)t/(float)max)*255.f);
+}
 RGB8Pixel StackedImage::getPeakPixel(int x, int y)
 {
 	if (!histograms || x <0 || x >= width || y <0 || y >= height) {
@@ -60,7 +63,15 @@ RGB8Pixel StackedImage::getPeakPixel(int x, int y)
 	uint16_t *redCounts = base;
 	uint16_t *greenCounts = base + ncolorvalues;
 	uint16_t *blueCounts = greenCounts + ncolorvalues;
-
+	if (stacked) {
+		
+		uint8_t red = (uint8_t)(std::min<uint16_t>(255,std::max<uint16_t>(0,redCounts[0]-88)));
+		uint8_t green = (uint8_t)(std::min<uint16_t>(
+			255, std::max<uint16_t>(0, greenCounts[0] - 133)));
+		uint8_t blue = (uint8_t)(std::min<uint16_t>(
+			255, std::max<uint16_t>(0, blueCounts[0] - 157)));
+		return RGB8Pixel({red, green, blue});
+	}
 	for (uint16_t i = 0; i < 256; ++i) {
 		if (redCounts[i] > maxRedCount) {
 			maxRedCount = redCounts[i];
@@ -89,6 +100,12 @@ void StackedImage::addPixel(int x, int y, RGB8Pixel value) {
 	uint16_t *redCounts = base;
 	uint16_t *greenCounts = base + ncolorvalues;
 	uint16_t *blueCounts = greenCounts + ncolorvalues;
+	if (stacked) {
+		redCounts[0] = std::min<uint16_t>(redCounts[0] + value.r, 65535);
+		greenCounts[0] = std::min<uint16_t>(greenCounts[0] + value.g, 65535);
+		blueCounts[0] = std::min<uint16_t>(blueCounts[0] + value.b, 65535);
+		return;
+	}
 	redCounts[value.r]++;
 	greenCounts[value.g]++;
 	blueCounts[value.b]++;
@@ -106,7 +123,7 @@ bool StackedImage::addLayer(RGBImage &layerImg)
 		if (total ==0) return false;
 		nHistograms = total;
 		// configure histogram layout
-		ncolorvalues =256;
+		ncolorvalues = stacked ? 1 : 256;
 		ncolors =3;
 		pixelsize = ncolors * ncolorvalues; // number of uint16_t elements per pixel
 		// total number of uint16_t elements

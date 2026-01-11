@@ -10,6 +10,7 @@
 !/Lib
 !NDIlib_Send_Video_and_Audio.vcxproj
 !SyncTestSend.cpp
+!AccurateNTP.cpp
 !NDIlib_Send_Video_and_Audio.vcxproj*
 !NDIlib_Recv_Framesync.vcxproj
 !SyncTestReceive.cpp

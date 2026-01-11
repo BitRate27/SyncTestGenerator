@@ -125,10 +125,13 @@
   <ItemGroup>
     <ClCompile Include="CR3toRGBImage.cpp" />
     <ClCompile Include="ImageExtractor.cpp" />
+    <ClCompile Include="ImageHelper.cpp" />
+    <ClCompile Include="JPGtoRGBImage.cpp" />
     <ClCompile Include="RGBImage.cpp" />
     <ClCompile Include="StackedImage.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="ImageHelper.h" />
     <ClInclude Include="RGBImage.h" />
     <ClInclude Include="RGBPixel.h" />
     <ClInclude Include="StackedImage.h" />
