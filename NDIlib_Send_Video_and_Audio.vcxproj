@@ -124,7 +124,7 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(SolutionDir)Lib\$(PlatformShortName)\</AdditionalLibraryDirectories>
-      <AdditionalDependencies>$(NDI_SDK_DIR)\Lib\$(LibrariesArchitecture)\Processing.NDI.Lib.$(LibrariesArchitecture).lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(NDI_SDK_DIR)\Lib\$(LibrariesArchitecture)\Processing.NDI.Lib.$(LibrariesArchitecture).lib;C:\Users\bgill\source\repos\SyncTestGenerator\x64\Debug\NTPClient.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PreBuildEvent>
       <Command>
@@ -182,9 +182,12 @@
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="AccurateNTP.cpp" />
-    <ClCompile Include="GetNTPTime.cpp" />
     <ClCompile Include="SyncTestSend.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="NTPClient\NTPClient.vcxproj">
+      <Project>{9523b907-9c6c-439c-9294-10ae19845d40}</Project>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -18,11 +18,12 @@
 #include <iostream>
 #include <stdexcept>
 #include <windows.h>
-uint64_t getAccurateNetworkTime(const std::string &ntpServer,
-				int port);
+#define NTPCLIENT_EXPORTS
+#include "NTPClient/NTPClient.h"
+
 using json = nlohmann::json;
 #define M_PI 3.14159265358f
-uint64_t getNTPTime(const std::string &ntpServer, int port);
+
 #ifdef _WIN32
 #ifdef _WIN64
 #pragma comment(lib, "Processing.NDI.Lib.x64.lib")
@@ -30,7 +31,6 @@ uint64_t getNTPTime(const std::string &ntpServer, int port);
 #pragma comment(lib, "Processing.NDI.Lib.x86.lib")
 #endif // _WIN64
 #endif
-int64_t getNTPTimeNanoseconds(const char *, int);
 bool audio_on = false;
 int64_t audio_on_time;
 bool white_on = false;
@@ -119,9 +119,9 @@ void obs_sync_debug_log_video_time(const char *message, uint64_t timestamp,
 
 		int64_t diff = white_on_time - audio_on_time;
 
-		printf("AT %17lld WT %17lld: %17lld %s\n",
-		       audio_on_time / 1000, white_on_time / 1000,
-		       diff / 1000, message);
+		printf("AT %lld WT %lld: %17lld %s\n",
+		       audio_on_time, white_on_time,
+		       diff, message);
 
 	} else if (white_on && (white_time == 0)) {
 		white_on = false;
@@ -148,6 +148,39 @@ static void sigint_handler(int)
 }
 enum class OutputType { Black, White, BW };
 enum class AudioType { Zero, Peak, Spike };
+
+static inline uint64_t util_mul_div64(uint64_t num, uint64_t mul, uint64_t div)
+{
+#if defined(_MSC_VER) && defined(_M_X64) && (_MSC_VER >= 1920)
+	unsigned __int64 high;
+	const unsigned __int64 low = _umul128(num, mul, &high);
+	unsigned __int64 rem;
+	return _udiv128(high, low, div, &rem);
+#else
+	const uint64_t rem = num % div;
+	return (num / div) * mul + (rem * mul) / div;
+#endif
+}
+static bool have_clockfreq = false;
+static LARGE_INTEGER clock_freq;
+static uint32_t winver = 0;
+
+static inline uint64_t get_clockfreq(void)
+{
+	if (!have_clockfreq) {
+		QueryPerformanceFrequency(&clock_freq);
+		have_clockfreq = true;
+	}
+
+	return clock_freq.QuadPart;
+}
+uint64_t os_gettime_ns(void)
+{
+	LARGE_INTEGER current_time;
+	QueryPerformanceCounter(&current_time);
+	return util_mul_div64(current_time.QuadPart, 1000000000,
+			      get_clockfreq());
+}
 
 int main(int argc, char *argv[])
 {
@@ -374,6 +407,7 @@ int main(int argc, char *argv[])
 		break;
 	}
 	NDI_send_create_desc.clock_audio = true;
+	NDI_send_create_desc.clock_video = true;
 
 	char message[256];
 	sprintf_s<256>(message, "NDI <- SyncTestSend [%s]",
@@ -396,13 +430,28 @@ int main(int argc, char *argv[])
 		  << NDI_send_create_desc.p_ndi_name << "..." << std::endl;
 
 	uint64_t ntp_time = getAccurateNetworkTime("pool.ntp.org",123);
+	ntp_time = getAccurateNetworkTime();
+
+	const uint64_t ns_per_sec = 1000000000ULL;
+
+	// Loop until ntp_time passes an even second to start
+	uint64_t start_second = ((ntp_time / ns_per_sec) + 1) * ns_per_sec;
+	uint64_t end_second = start_second + ns_per_sec;
+
+	while (ntp_time < start_second && !exit_loop) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		ntp_time = getAccurateNetworkTime();
+	}
+	std::cout << "White starts at NTP time: " << start_second << " ns"
+		  << std::endl;
+	std::cout << "Starting send loop at NTP time: " << ntp_time << " ns"
+		  << std::endl;
+	std::cout << "Ending white at NTP time: " << end_second << " ns"
+		  << std::endl;
+	std::cout << "Difference " << ntp_time - start_second << std::endl;
 
 	// We will send video frames until exit
 	for (int idx =0; !exit_loop; idx++) {
-		timespec_get(&ts, TIME_UTC);
-		long long start_loop_time =
-			(long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-
 		if (!send_no_connection) { 
 			// Periodically (every500 ms) check the number of connections. If zero, skip sending.
 			auto now_check = std::chrono::steady_clock::now();
@@ -437,22 +486,10 @@ int main(int argc, char *argv[])
 		bool white = false;
 		bool sound = false;
 
-		uint64_t frame_ns = ntp_time + (idx * frame_time);
+		uint64_t frame_ns = ntp_time;
 
 		if (output_type == OutputType::BW) {
-
-			const uint64_t ms = 1000000ULL; // 1 ms = 1,000,000 ns
-			uint64_t ms_since_epoch =
-				frame_ns / ms; // milliseconds since epoch
-			const uint64_t cycle_ms =
-				4000ULL; // 4 second cycle in ms
-			const uint64_t white_ms =
-				1000ULL; // 1 second white duration in ms
-			uint64_t pos_ms =
-				ms_since_epoch %
-				cycle_ms; // position inside the 4s cycle
-
-			white = (pos_ms < white_ms);
+			white = (frame_ns >= start_second) && (frame_ns <= end_second);
 
 			// Make audio follow the white interval as well
 			sound = white;
@@ -467,7 +504,14 @@ int main(int argc, char *argv[])
 		NDI_audio_frame.no_samples = audio_no_samples;
 
 		if (!last_sound && sound) {
-			sine_sample =0;
+			sine_sample = 0;
+		}
+
+		if (last_white && !white) {
+			start_second += (ns_per_sec * 4);
+			end_second = start_second + ns_per_sec;
+			std::cout << "New white" << start_second << " ns"
+				  << std::endl;	
 		}
 
 		// Fill audio
@@ -483,9 +527,6 @@ int main(int argc, char *argv[])
 				p_ch[sample_no] = (sound) ? sample :0.0f;
 			}
 			last_sound = sound;
-		}
-		if (white && !last_white) {
-			int nnn = 0;
 		}
 		
 		NDI_audio_frame.timestamp = frame_ns / 100;
@@ -550,23 +591,9 @@ int main(int argc, char *argv[])
 		obs_sync_debug_log_video_time(message, NDI_video_frame.timestamp, NDI_video_frame.p_data);
 		NDIlib_send_send_video_v2(pNDI_send, &NDI_video_frame);
 
-		if (!last_white && white) {
-			int nnn = 0;
-		}
 		last_white = white;
 
-		/*
-		timespec_get(&ts, TIME_UTC);
-		long long end_loop_time =
-			(long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-		
-		long long sleep_time =
-			frame_time - (end_loop_time - start_loop_time);
-		// std::this_thread::sleep_for(std::chrono::nanoseconds(sleep_time));
-
-		printf("End of Loop %d: sleep_time %14lld, timestamp %14lld\n",
-		       idx, sleep_time, NDI_video_frame.timestamp);
-		*/
+		ntp_time = getAccurateNetworkTime();
 	}
 
 	if (timer_thread_started) {

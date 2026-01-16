@@ -1,3 +1,7 @@
+#include "pch.h"
+#define NTPCLIENT_EXPORTS
+#include "NTPClient.h"
+
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <iostream>
@@ -45,6 +49,7 @@ public:
 		 port_(port),
 		 socket_(INVALID_SOCKET)
 	{
+		bestDiff = 10000000000ULL;
 	}
 
 	~NTPClient()
@@ -100,7 +105,8 @@ public:
 		packet.li_vn_mode =0x1B; // LI=0, VN=3, Mode=3 (client)
 
 		// T1: Client transmit timestamp (origin)
-		uint64_t t1 = getCurrentNTPTimestamp();
+		uint64_t t1 =
+			getSystemNs(std::chrono::system_clock::now());
 
 		// embed t1 transmit timestamp into packet (network order)
 		uint32_t tx_s = htonl(static_cast<uint32_t>(t1 >>32));
@@ -110,7 +116,8 @@ public:
 
 		// Send request
 		if (sendto(socket_, (char *)&packet, sizeof(packet),0,
-			 (struct sockaddr *)&serverAddr_, sizeof(serverAddr_)) == SOCKET_ERROR) {
+			 (struct sockaddr *)&serverAddr_,
+			 sizeof(serverAddr_)) == SOCKET_ERROR) {
 			std::cerr << "Send failed\n";
 			return false;
 		}
@@ -121,7 +128,8 @@ public:
 				 (struct sockaddr *)&serverAddr_, &addrLen);
 
 		// T4: Client receive timestamp (destination)
-		uint64_t t4 = getCurrentNTPTimestamp();
+		uint64_t t4 =
+			getSystemNs(std::chrono::system_clock::now());
 
 		if (bytesReceived == SOCKET_ERROR || bytesReceived < (int)sizeof(packet)) {
 			std::cerr << "Receive failed\n";
@@ -140,6 +148,16 @@ public:
 		double d3 = ntpDiff(t4, t1);
 		double d4 = ntpDiff(t3, t2);
 
+		/*
+		std::cout << "Debug NTP timings: " << std::endl;
+		std::cout << "t1 = " << t1 << std::endl;
+		std::cout << "t2 = " << t2 << std::endl;
+		std::cout << "t3 = " << t3 << std::endl;
+		std::cout << "t4 = " << t4 << std::endl;
+		std::cout << "d1 = " << d1 << " s" << std::endl;
+		std::cout << "d2 = " << d2 << " s" << std::endl;
+		*/
+
 		offset = (d1 + d2) /2.0;
 		roundTripDelay = d3 - d4;
 
@@ -150,92 +168,91 @@ public:
 	// Additionally compute a scale factor (slope) between system ns and precise ns.
 	// Returns true and fills outOffset, outPreciseNs, outDelay, outScale on success.
 	bool sampleBest(int samples, double &outOffset, uint64_t &outPreciseNs,
-			double &outDelay, double &outScale,
-			std::chrono::system_clock::time_point &outSysTime,
-			int sleepMs = 100)
+		double &outDelay,
+		uint64_t &outSysTime,
+		int sleepMs =100)
 	{
 		double bestDelay = std::numeric_limits<double>::infinity();
 		uint64_t bestPrecise = 0;
-		std::chrono::system_clock::time_point bestSysTime = std::chrono::system_clock::now();
+		uint64_t bestSysTime =
+			getSystemNs(std::chrono::system_clock::now());
 		double bestOffset = 0.0;
 
 		std::vector<uint64_t> sysSamples;
 		std::vector<uint64_t> preciseSamples;
 
-		for (int i = 0; i < samples; ++i) {
-			double offsetSec = 0.0;
-			double rtt = 0.0;
+		for (int i =0; i < samples; ++i) {
+			double offsetSec =0.0;
+			double rtt =0.0;
 			if (!getNetworkTime(offsetSec, rtt)) {
 				std::this_thread::sleep_for(
 					std::chrono::milliseconds(sleepMs));
 				continue;
 			}
 
-			auto now = std::chrono::system_clock::now();
-			auto sysNs = static_cast<uint64_t>(
-				std::chrono::duration_cast<
-					std::chrono::nanoseconds>(
-					now.time_since_epoch())
-					.count());
-			long long preciseNsLL =
-				static_cast<long long>(sysNs) +
-				static_cast<long long>(
-					std::llround(offsetSec * 1e9));
-			if (preciseNsLL < 0)
-				preciseNsLL = 0;
+			auto sysNs =
+				getSystemNs(
+				std::chrono::system_clock::now());
+			
+			double offsetNs = offsetSec * 1e9;
+			uint64_t preciseNsLL = static_cast<uint64_t>(sysNs) + static_cast<int64_t>(std::llround(offsetNs));
+			if (preciseNsLL <0) preciseNsLL =0;
 			uint64_t preciseNs = static_cast<uint64_t>(preciseNsLL);
+
+			sysSamples.push_back(sysNs);
+			preciseSamples.push_back(preciseNs);
 
 			if (rtt < bestDelay) {
 				bestDelay = rtt;
 				bestOffset = offsetSec;
 				bestPrecise = preciseNs;
-				bestSysTime = now; 
+				bestSysTime = sysNs;
 			}
 
-			std::this_thread::sleep_for(
-				std::chrono::milliseconds(sleepMs));
+			std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
 		}
 
 		if (bestDelay == std::numeric_limits<double>::infinity()) return false;
 
-		// Compute scale 
-		double scale = (double)(
-				std::chrono::duration_cast<
-					std::chrono::nanoseconds>(
-					bestSysTime.time_since_epoch())
-					.count()) / (double)bestPrecise;
-
 		outOffset = bestOffset;
 		outPreciseNs = bestPrecise;
 		outDelay = bestDelay;
-		outScale = scale;
 		outSysTime = bestSysTime;
 		return true;
 	}
 
-	uint64_t calcNTPTimeAtSystemTime(uint64_t sysTime) { 
-		
-
+	void syncSystemToNTP(uint64_t diff, uint64_t systemTime, uint64_t ntpTime) {
+		std::lock_guard<std::mutex> lk(baseMutex);
+		if (diff < bestDiff) {
+			std::cout << "Updating NTP base sync, diff = " << diff
+				  << " ns\n";
+			bestDiff = diff;
+			baseSystemTimeNs = systemTime;
+			basePreciseNs = ntpTime;
+		}
 	}
+
+	uint64_t calcNTPTimeAtSystemTime(uint64_t sysTime) {
+		std::lock_guard<std::mutex> lk(baseMutex);
+		return sysTime + (basePreciseNs - baseSystemTimeNs);
+	}
+
+	uint64_t getSystemNs(std::chrono::system_clock::time_point sysTime)
+	{
+		return static_cast<uint64_t>(
+			std::chrono::duration_cast<std::chrono::nanoseconds>(
+			sysTime.time_since_epoch()).count());
+	}
+
 private:
 	std::string server_;
 	int port_;
 	SOCKET socket_;
 	struct sockaddr_in serverAddr_;
-
-	uint64_t getCurrentNTPTimestamp()
-	{
-		auto now = std::chrono::system_clock::now();
-		auto duration = now.time_since_epoch();
-		auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
-			duration);
-		auto fraction = duration - seconds;
-
-		uint64_t ntpSeconds = static_cast<uint64_t>(seconds.count()) + NTP_UNIX_OFFSET;
-		uint64_t ntpFraction = std::chrono::duration_cast<std::chrono::duration<uint64_t, std::ratio<1,0x100000000ULL>>>(fraction).count();
-
-		return (ntpSeconds <<32) | ntpFraction;
-	}
+    uint64_t basePreciseNs; // nanoseconds since Unix epoch at sync
+    uint64_t baseSystemTimeNs;
+    uint64_t bestDiff;
+    std::mutex baseMutex;
 
 	uint64_t ntpToUint64(uint32_t seconds, uint32_t fraction)
 	{
@@ -245,33 +262,30 @@ private:
 	double ntpDiff(uint64_t a, uint64_t b)
 	{
 		int64_t diff = (int64_t)a - (int64_t)b;
-		return diff /4294967296.0; // Convert from NTP fraction to seconds
+		return diff /
+		4294967296.0; // Convert from NTP fraction to seconds
 	}
 };
 
 // Cached estimate: call NTP server once, then estimate current time by applying elapsed system time and scale
-uint64_t getAccurateNetworkTime(const std::string &ntpServer = "pool.ntp.org", int port =123) {
+NTPCLIENT_API uint64_t getAccurateNetworkTime(const std::string &ntpServer,
+						int port)
+{
 	static bool initialized = false;
-	static uint64_t basePreciseNs =0; // nanoseconds since Unix epoch at sync
-	static std::chrono::system_clock::time_point baseSystemTime;
-	static double baseScale =1.0; // multiplier to apply to system nanoseconds
-	static std::mutex baseMutex;
 	static std::atomic<bool> keepRunning(false);
 	static std::thread updaterThread;
 	static bool updaterStarted = false;
+	static NTPClient ntpClient(ntpServer,port);
+	static std::chrono::system_clock::time_point lastQueryTime;
+	static uint64_t lastQueryNs = 0;
+	static uint64_t lastThisNs = 0;
 
 	if (initialized) {
-		// estimate from base
-		std::lock_guard<std::mutex> lk(baseMutex);
-		auto now = std::chrono::system_clock::now();
-		auto deltaSys = std::chrono::duration_cast<std::chrono::nanoseconds>(now - baseSystemTime).count();
-		double scaled = static_cast<double>(deltaSys) * baseScale;
-		uint64_t add = static_cast<uint64_t>(std::llround(scaled));
-		return basePreciseNs + add;
+		return ntpClient.calcNTPTimeAtSystemTime(
+			ntpClient.getSystemNs(std::chrono::system_clock::now()));
 	}
 
-	NTPClient client(ntpServer, port);
-	if (!client.initialize()) {
+	if (!ntpClient.initialize()) {
 		std::cerr << "Failed to initialize NTP client\n";
 		return UINT64_MAX;
 	}
@@ -282,27 +296,22 @@ uint64_t getAccurateNetworkTime(const std::string &ntpServer = "pool.ntp.org", i
 	double bestDelay = std::numeric_limits<double>::infinity();
 	uint64_t bestPreciseNs =0;
 	double bestScale =1.0;
-	std::chrono::system_clock::time_point bestSysTime; 
+	uint64_t bestSysTime;
 
 	double outScale =1.0;
-
-	if (!client.sampleBest(samples, bestOffset, bestPreciseNs, bestDelay, outScale, bestSysTime)) {
+	if (!ntpClient.sampleBest(samples, bestOffset, bestPreciseNs, bestDelay,
+			 bestSysTime)) {
 		std::cerr << "Failed to obtain any NTP samples\n";
 		return UINT64_MAX;
 	}
 
 	// Log initial offset and scale
-	std::cout << "NTP initial sync: offset=" << std::fixed << std::setprecision(9) << bestOffset
-		<< " s, scale=" << std::setprecision(12) << outScale << ", delay=" << std::setprecision(6) << bestDelay << " s" << std::endl;
-
-	{
-		std::lock_guard<std::mutex> lk(baseMutex);
-		basePreciseNs = bestPreciseNs;
-		baseSystemTime = std::chrono::system_clock::now();
-		baseScale = outScale;
-		initialized = true;
-	}
-
+	std::cout << "NTP initial sync: offset=" << std::fixed
+		  << std::setprecision(9) << bestOffset << ", delay =" << std::setprecision(6) << bestDelay << " s " << std::endl;
+	ntpClient.syncSystemToNTP(1000000001ULL, bestSysTime,
+		bestPreciseNs); // First time is best guess at 1 second diff 
+	initialized = true;
+	
 	// Start updater thread once
 	if (!updaterStarted) {
 		keepRunning = true;
@@ -316,73 +325,26 @@ uint64_t getAccurateNetworkTime(const std::string &ntpServer = "pool.ntp.org", i
 				if (!c.initialize()) continue;
 
 				uint64_t newPrecise = 0;
-				std::chrono::system_clock::time_point newSysTime; 
+				uint64_t newSysTime = 0;
 				double newOffset = 0;
 				double newDelay = 0.0;
-				double newScale = 1.0;
-				if (!c.sampleBest(5, newOffset, newPrecise,
-						  newDelay, newScale, newSysTime))
-					continue;
+				if (!c.sampleBest(5, newOffset, newPrecise, newDelay, newSysTime)) continue;
 
-				// Now compute how much time has elapsed since the NTP sample was taken
-				auto now = std::chrono::system_clock::now();
-				auto currentSysNs =
-					std::chrono::duration_cast<
-						std::chrono::nanoseconds>(
-						now.time_since_epoch())
-						.count();
-				auto newSysNs =
-					std::chrono::duration_cast<
-						std::chrono::nanoseconds>(
-						newSysTime.time_since_epoch())
-						.count();
-				int64_t elapsedSinceNtpSample =
-					currentSysNs - newSysNs;
+				// Compare newPrecise with the calculated NTP time at newSysTime
+				uint64_t expectedPrecise =
+					ntpClient.calcNTPTimeAtSystemTime(
+						newSysTime);
 
-				std::cout
-					<< "Elapsed time since best NTP sample "
-					<< elapsedSinceNtpSample;
+				uint64_t diff =
+					(newPrecise > expectedPrecise)
+						? (newPrecise - expectedPrecise)
+						: (expectedPrecise -
+						   newPrecise);
 
-				// Estimate what the NTP time would be NOW (accounting for elapsed time)
-				uint64_t newPreciseNow =
-					newPrecise +
-					static_cast<uint64_t>(
-						static_cast<double>(
-							elapsedSinceNtpSample) *
-						newScale);
-
-				// Now estimate using old base
-				double deltaSys =
-					(double)(
-					std::chrono::duration_cast<
-						std::chrono::nanoseconds>(
-						newSysTime - baseSystemTime)
-						.count());
-				double estScaled =
-					static_cast<double>(deltaSys) *
-					baseScale;
-				uint64_t estAdd = static_cast<uint64_t>(
-					std::llround(estScaled));
-				uint64_t estimatedNow = basePreciseNs + estAdd;
-
-				// NOW this comparison is apples-to-apples!
-				{
-					// Compute difference: newPrecise - estimatedNow (signed)
-					int64_t diffNs = static_cast<int64_t>(newPreciseNow) - static_cast<int64_t>(estimatedNow);
-					double diffSec = static_cast<double>(diffNs) /1e9;
-					std::cout << "NTP vs estimate diff: " << diffNs << " ns (" << std::fixed << std::setprecision(9) << diffSec << " s)" << std::endl;
-				}
-
-				// Log update offset and scale
-				std::cout << "NTP update: offset=" << std::fixed << std::setprecision(9) << newOffset
-					<< " s, scale=" << std::setprecision(12) << newScale << ", delay=" << std::setprecision(6) << newDelay << " s" << std::endl;
-				// update shared base
-				{
-					std::lock_guard<std::mutex> lk(baseMutex);
-					basePreciseNs = newPrecise;
-					baseSystemTime = newSysTime;
-					baseScale = newScale;
-				}
+				// update shared base times if this is better
+				ntpClient.syncSystemToNTP(diff, newSysTime,
+								newPrecise);
+				
 			}
 		});
 
@@ -394,8 +356,9 @@ uint64_t getAccurateNetworkTime(const std::string &ntpServer = "pool.ntp.org", i
 				if (flag) flag->store(false);
 				if (thr && thr->joinable()) thr->join();
 			}
-		} cleaner{ &updaterThread, &keepRunning };
+		} cleaner{&updaterThread, &keepRunning};
 	}
 
-	return basePreciseNs;
+	return bestPreciseNs;
 }
+

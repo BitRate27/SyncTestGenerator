@@ -22,6 +22,7 @@
 !/SyncTestSend.vcxproj
 !/SyncTestReceive.vcxproj
 !/ImageExtractor
+!/NTPClient
 
 # Exclude lock files
 *.lock.json
