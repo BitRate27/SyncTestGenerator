@@ -143,12 +143,12 @@ public:
 		uint64_t t3 = ntpToUint64(ntohl(packet.txTm_s), ntohl(packet.txTm_f));
 
 		// Compute NTP algorithm values
-		double d1 = ntpDiff(t2, t1);
-		double d2 = ntpDiff(t3, t4);
-		double d3 = ntpDiff(t4, t1);
-		double d4 = ntpDiff(t3, t2);
+		int64_t d1 = ntpDiff(t2, t1);
+		int64_t d2 = ntpDiff(t3, t4);
+		int64_t d3 = ntpDiff(t4, t1);
+		int64_t d4 = ntpDiff(t3, t2);
 
-		/*
+		
 		std::cout << "Debug NTP timings: " << std::endl;
 		std::cout << "t1 = " << t1 << std::endl;
 		std::cout << "t2 = " << t2 << std::endl;
@@ -156,9 +156,9 @@ public:
 		std::cout << "t4 = " << t4 << std::endl;
 		std::cout << "d1 = " << d1 << " s" << std::endl;
 		std::cout << "d2 = " << d2 << " s" << std::endl;
-		*/
+		
 
-		offset = (d1 + d2) /2.0;
+		offset = (d1 + d2) / 2.0;
 		roundTripDelay = d3 - d4;
 
 		return true;
@@ -259,11 +259,10 @@ private:
 		return ((uint64_t)seconds <<32) | fraction;
 	}
 
-	double ntpDiff(uint64_t a, uint64_t b)
+	int64_t ntpDiff(uint64_t a, uint64_t b)
 	{
 		int64_t diff = (int64_t)a - (int64_t)b;
-		return diff /
-		4294967296.0; // Convert from NTP fraction to seconds
+		return diff;
 	}
 };
 
@@ -318,7 +317,7 @@ NTPCLIENT_API uint64_t getAccurateNetworkTime(const std::string &ntpServer,
 		updaterStarted = true;
 		updaterThread = std::thread([ntpServer, port]() {
 			while (keepRunning.load()) {
-				std::this_thread::sleep_for(std::chrono::seconds(15));
+				std::this_thread::sleep_for(std::chrono::seconds(1));
 				if (!keepRunning.load()) break;
 				// Re-query to update basePreciseNs and scale
 				NTPClient c(ntpServer, port);

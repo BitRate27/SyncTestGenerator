@@ -23,6 +23,7 @@
 !/SyncTestReceive.vcxproj
 !/ImageExtractor
 !/NTPClient
+!/TimeStampAnalyzer
 
 # Exclude lock files
 *.lock.json

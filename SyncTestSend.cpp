@@ -486,7 +486,7 @@ int main(int argc, char *argv[])
 		bool white = false;
 		bool sound = false;
 
-		uint64_t frame_ns = ntp_time;
+		uint64_t frame_ns = ntp_time + (idx * frame_time);
 
 		if (output_type == OutputType::BW) {
 			white = (frame_ns >= start_second) && (frame_ns <= end_second);
@@ -593,7 +593,7 @@ int main(int argc, char *argv[])
 
 		last_white = white;
 
-		ntp_time = getAccurateNetworkTime();
+		// ntp_time = getAccurateNetworkTime();
 	}
 
 	if (timer_thread_started) {

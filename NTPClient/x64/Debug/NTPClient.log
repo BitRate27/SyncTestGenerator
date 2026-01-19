@@ -1,2 +1,5 @@
 ﻿  NTPClient.cpp
+C:\Users\bgill\source\repos\SyncTestGenerator\NTPClient\NTPClient.cpp(162,23): warning C4244: '=': conversion from 'int64_t' to 'double', possible loss of data
+  (compiling source file '/NTPClient.cpp')
+  
   NTPClient.vcxproj -> C:\Users\bgill\source\repos\SyncTestGenerator\x64\Debug\NTPClient.lib
