@@ -24,6 +24,7 @@
 !/ImageExtractor
 !/NTPClient
 !/TimeStampAnalyzer
+!/NTPServer
 
 # Exclude lock files
 *.lock.json

@@ -1,3 +1,9 @@
+#pragma once
+// Force static library usage of NTPClient and link the library if available
+#define NTPCLIENT_STATIC
+#pragma comment(lib, "NTPClient.lib")
+
+#include <winsock2.h>
 #include <Processing.NDI.Lib.h>
 #include <algorithm>
 #include <atomic>
@@ -18,7 +24,6 @@
 #include <iostream>
 #include <stdexcept>
 #include <windows.h>
-#define NTPCLIENT_EXPORTS
 #include "NTPClient/NTPClient.h"
 
 using json = nlohmann::json;
