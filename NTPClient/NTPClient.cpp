@@ -129,12 +129,12 @@ uint64_t NTPClient::getNetworkTimeNow(uint64_t &rt) {
 	double d1 = ntpDiff(t2, t1);
 	double d2 = ntpDiff(t3, t4);
 	double d3 = ntpDiff(t4, t1);
-	/*
+	
 	std::cout << "t1 = " << t1 << std::endl;
 	std::cout << "t2 = " << t2 << std::endl;
 	std::cout << "t3 = " << t3 << std::endl;
 	std::cout << "t4 = " << t4 << std::endl;
-	*/ 
+	 
 	rt = d3;
 	return t3;
 	 // +((d2 / (d1 + d2 + (double)(t3 - t2))) * d3);
@@ -152,10 +152,17 @@ bool NTPClient::getNetworkOffsetFromChronoNow(double &offset, double &roundTripD
 	uint64_t t1 = getSystemNs(std::chrono::system_clock::now());
 
 	// embed t1 transmit timestamp into packet (network order)
-	uint32_t tx_s = htonl(static_cast<uint32_t>(t1 >> 32));
-	uint32_t tx_f = htonl(static_cast<uint32_t>(t1 & 0xFFFFFFFF));
-	packet.txTm_s = tx_s;
-	packet.txTm_f = tx_f;
+	uint32_t tx_s = 0;
+	uint32_t tx_f = 0;
+	uint64ToNTP(t1, tx_s, tx_f);
+
+	/* Test showed off by 1ns
+	auto testT1 = ntpToUint64(ntohl(tx_s), ntohl(tx_f));
+	if (testT1 != t1) {
+		std::cerr << "Timestamp conversion error\n";
+		return false;
+	}
+	*/
 
 	// Send request
 	if (sendto(socket_, (char *)&packet, sizeof(packet), 0,
@@ -192,6 +199,7 @@ bool NTPClient::getNetworkOffsetFromChronoNow(double &offset, double &roundTripD
 	int64_t d3 = ntpDiff(t4, t1);
 	int64_t d4 = ntpDiff(t3, t2);
 
+	
 	std::cout << "Debug NTP timings: " << std::endl;
 	std::cout << "t1 = " << t1 << std::endl;
 	std::cout << "t2 = " << t2 << std::endl;
@@ -199,29 +207,30 @@ bool NTPClient::getNetworkOffsetFromChronoNow(double &offset, double &roundTripD
 	std::cout << "t4 = " << t4 << std::endl;
 	std::cout << "d1 = " << d1 << " s" << std::endl;
 	std::cout << "d2 = " << d2 << " s" << std::endl;
-
+	
 
 	offset = (d1 + d2) / 2.0;
 	roundTripDelay = d3 - d4;
-	std::cout << "rt = " << roundTripDelay << " s" << std::endl;
+	// std::cout << "rt = " << roundTripDelay << " s" << std::endl;
 	return true;
 }
 
+
 bool NTPClient::sampleBest(int samples, double &outOffset,
-			   uint64_t &outPreciseNs, double &outDelay,
-			   uint64_t &outSysTime, int sleepMs)
+			 uint64_t &outPreciseNs, double &outDelay,
+			 uint64_t &outSysTime, int sleepMs)
 {
 	double bestDelay = std::numeric_limits<double>::infinity();
-	uint64_t bestPrecise = 0;
+	uint64_t bestPrecise =0;
 	uint64_t bestSysTime = getSystemNs(std::chrono::system_clock::now());
-	double bestOffset = 0.0;
+	double bestOffset =0.0;
 
 	std::vector<uint64_t> sysSamples;
 	std::vector<uint64_t> preciseSamples;
 
-	for (int i = 0; i < samples; ++i) {
-		double offsetSec = 0.0;
-		double rtt = 0.0;
+	for (int i =0; i < samples; ++i) {
+		double offsetSec =0.0;
+		double rtt =0.0;
 		if (!getNetworkOffsetFromChronoNow(offsetSec, rtt)) {
 			std::this_thread::sleep_for(
 				std::chrono::milliseconds(sleepMs));
@@ -230,12 +239,12 @@ bool NTPClient::sampleBest(int samples, double &outOffset,
 
 		auto sysNs = getSystemNs(std::chrono::system_clock::now());
 
-		double offsetNs = offsetSec * 1e9;
+		double offsetNs = offsetSec *1e9;
 		uint64_t preciseNsLL =
 			static_cast<uint64_t>(sysNs) +
 			static_cast<int64_t>(std::llround(offsetNs));
-		if (preciseNsLL < 0)
-			preciseNsLL = 0;
+		if (preciseNsLL <0)
+			preciseNsLL =0;
 		uint64_t preciseNs = static_cast<uint64_t>(preciseNsLL);
 
 		sysSamples.push_back(sysNs);
@@ -251,33 +260,106 @@ bool NTPClient::sampleBest(int samples, double &outOffset,
 		std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
 	}
 
-	if (bestDelay == std::numeric_limits<double>::infinity())
+	if (sysSamples.empty())
 		return false;
 
-	outOffset = bestOffset;
-	outPreciseNs = bestPrecise;
+	// Perform linear regression precise = m * sys + c
+	auto computeRegression = [&](const std::vector<size_t> &indices, double &m, double &c, double &meanX) {
+		double sumX =0.0, sumY =0.0;
+		size_t n = indices.size();
+		if (n ==0) { m =1.0; c =0.0; meanX =0.0; return; }
+		for (size_t idx : indices) {
+			sumX += static_cast<double>(sysSamples[idx]);
+			sumY += static_cast<double>(preciseSamples[idx]);
+		}
+		meanX = sumX / (double)n;
+		double meanY = sumY / (double)n;
+		double covXY =0.0, varX =0.0;
+		for (size_t idx : indices) {
+			double dx = static_cast<double>(sysSamples[idx]) - meanX;
+			double dy = static_cast<double>(preciseSamples[idx]) - meanY;
+			covXY += dx * dy;
+			varX += dx * dx;
+		}
+		if (varX ==0.0) {
+			m =1.0;
+			c = meanY - m * meanX;
+		} else {
+			m = covXY / varX;
+			c = meanY - m * meanX;
+		}
+	};
+
+	// initial indices: all samples
+	std::vector<size_t> indices(sysSamples.size());
+	for (size_t i =0; i < indices.size(); ++i) indices[i] = i;
+
+	double m =1.0, c =0.0, meanX =0.0;
+	computeRegression(indices, m, c, meanX);
+
+	// compute residuals and standard deviation
+	std::vector<double> residuals(indices.size());
+	double sumsq =0.0;
+	for (size_t k =0; k < indices.size(); ++k) {
+		size_t idx = indices[k];
+		double predicted = m * static_cast<double>(sysSamples[idx]) + c;
+		double res = static_cast<double>(preciseSamples[idx]) - predicted;
+		residuals[k] = res;
+		sumsq += res * res;
+	}
+	double variance =0.0;
+	if (indices.size() >1) variance = sumsq / (double)(indices.size() -1);
+	double stddev = std::sqrt(variance);
+
+	// filter out outliers beyond2*stddev
+	std::vector<size_t> filtered;
+	for (size_t k =0; k < indices.size(); ++k) {
+		if (std::fabs(residuals[k]) <=2.0 * stddev) filtered.push_back(indices[k]);
+	}
+
+	// require at least2 points to do regression; otherwise keep original set
+	if (filtered.size() >=2) {
+		computeRegression(filtered, m, c, meanX);
+		// recompute meanX already set
+	} else {
+		// fallback: use simple mean-based offset
+		double sumOffsets =0.0;
+		for (size_t i =0; i < sysSamples.size(); ++i) {
+			sumOffsets += static_cast<double>(preciseSamples[i]) - static_cast<double>(sysSamples[i]);
+		}
+		meanX =0.0;
+		for (size_t i =0; i < sysSamples.size(); ++i) meanX += static_cast<double>(sysSamples[i]);
+		meanX /= (double)sysSamples.size();
+		m =1.0;
+		c = (sumOffsets / (double)sysSamples.size()) + meanX - m * meanX; // so that predicted - meanX = mean offset
+	}
+
+	// predicted precise at meanX
+	double predictedPrecise = m * meanX + c;
+	double offsetNs = predictedPrecise - meanX;
+
+	outOffset = offsetNs /1e9;
+	outPreciseNs = static_cast<uint64_t>(std::llround(predictedPrecise));
+	outSysTime = static_cast<uint64_t>(std::llround(meanX));
 	outDelay = bestDelay;
-	outSysTime = bestSysTime;
+
 	return true;
 }
 
-void NTPClient::syncSystemToNTP(uint64_t diff, uint64_t systemTime,
-				uint64_t ntpTime)
+void NTPClient::syncSystemToNTP(uint64_t diff)
 {
 	std::lock_guard<std::mutex> lk(baseMutex);
 	if (diff < bestDiff) {
 		std::cout << "Updating NTP base sync, diff = " << diff
 			  << " ns\n";
 		bestDiff = diff;
-		baseSystemTimeNs = systemTime;
-		basePreciseNs = ntpTime;
 	}
 }
 
 uint64_t NTPClient::calcNTPTimeAtSystemTime(uint64_t sysTime)
 {
 	std::lock_guard<std::mutex> lk(baseMutex);
-	return sysTime + (basePreciseNs - baseSystemTimeNs);
+	return sysTime + bestDiff;
 }
 
 uint64_t NTPClient::getSystemNs(std::chrono::system_clock::time_point sysTime)
@@ -294,7 +376,14 @@ uint64_t NTPClient::ntpToUint64(uint32_t seconds, uint32_t fraction)
 		((uint64_t)fraction * 1000000000ULL) / 4294967296ULL;
 	return ((uint64_t)(seconds - 2208988800ULL) * 1000000000ULL) + nanoseconds;
 }
+void NTPClient::uint64ToNTP(uint64_t nanoseconds, uint32_t &seconds, uint32_t &fraction)
+{
+	seconds = htonl(static_cast<uint32_t>(nanoseconds / 1000000000ULL) +
+		  2208988800ULL);
+	double remNs = static_cast<double>(nanoseconds % 1000000000ULL);
 
+	fraction = htonl(static_cast<uint32_t>(4294967296.0 * (remNs / 1000000000.0)));
+}
 int64_t NTPClient::ntpDiff(uint64_t a, uint64_t b)
 {
 	int64_t diff = (int64_t)a - (int64_t)b;
@@ -349,13 +438,11 @@ NTPCLIENT_API uint64_t getAccurateNetworkTime(const std::string &ntpServer,
 		  << std::setprecision(9) << bestOffset
 		  << ", delay =" << std::setprecision(6) << bestDelay << " s "
 		  << std::endl;
-	ntpClient->syncSystemToNTP(
-		1000000001ULL, bestSysTime,
-		bestPreciseNs); // First time is best guess at1 second diff
+	ntpClient->syncSystemToNTP(bestOffset);
 	initialized = true;
 
 	// Start updater thread once
-	if (!updaterStarted) {
+	if (false) { //!updaterStarted) {
 		keepRunning = true;
 		updaterStarted = true;
 		NTPClient *c = new NTPClient(ntpServer, port);
@@ -389,8 +476,7 @@ NTPCLIENT_API uint64_t getAccurateNetworkTime(const std::string &ntpServer,
 						   newPrecise);
 
 				// update shared base times if this is better
-				ntpClient->syncSystemToNTP(diff, newSysTime,
-							  newPrecise);
+				ntpClient->syncSystemToNTP(diff);
 			}
 		});
 

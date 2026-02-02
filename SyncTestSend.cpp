@@ -220,6 +220,7 @@ int main(int argc, char *argv[])
 	std::string config_file;
 	uint32_t white_color = (128 | (235 << 8));
 	uint32_t black_color = (128 | (16 << 8));
+	bool use_ntp = false;
 
 	// Parse command line arguments to find /duration=
 	for (int i = 1; i < argc; ++i) {
@@ -244,6 +245,8 @@ int main(int argc, char *argv[])
 			setcode = true;
 		} else if (strncmp(argv[i], "-sendnoconn", 10) == 0) {
 			send_no_connection = true;
+		} else if (strncmp(argv[i], "-ntp", 4) == 0) {
+			use_ntp = true;
 		} else if (strncmp(argv[i], "-config=", 8) == 0) {
 			config_file = argv[i] + 8;
 		}
@@ -381,8 +384,10 @@ int main(int argc, char *argv[])
 	long long nanoseconds = (long long)ts.tv_sec *1000000000LL + ts.tv_nsec;
 
 	uint64_t frame_time = (uint64_t)(1000000000ULL * frame_rate_D / frame_rate_N);
+	frame_time = 30000000ULL; // Force shorter timestamps for testing
 
-	auto start_time = nanoseconds;
+	auto start_time = use_ntp ? getAccurateNetworkTime("pool.ntp.org",123) : nanoseconds;
+
 	auto last_sync_time = start_time;
 
 	// Print the resolution for debugging
@@ -434,26 +439,20 @@ int main(int argc, char *argv[])
 	std::cout << "Waiting for connection on "
 		  << NDI_send_create_desc.p_ndi_name << "..." << std::endl;
 
-	uint64_t ntp_time = getAccurateNetworkTime("pool.ntp.org",123);
-	ntp_time = getAccurateNetworkTime();
-
 	const uint64_t ns_per_sec = 1000000000ULL;
 
-	// Loop until ntp_time passes an even second to start
-	uint64_t start_second = ((ntp_time / ns_per_sec) + 1) * ns_per_sec;
+	// Loop until start_time passes an even second to start
+	uint64_t start_second = ((start_time / ns_per_sec) + 1) * ns_per_sec;
 	uint64_t end_second = start_second + ns_per_sec;
+	last_white = true;
+	start_time = start_second;
 
-	while (ntp_time < start_second && !exit_loop) {
-		std::this_thread::sleep_for(std::chrono::milliseconds(1));
-		ntp_time = getAccurateNetworkTime();
-	}
-	std::cout << "White starts at NTP time: " << start_second << " ns"
+	std::cout << "      White starts at: " << start_second << " ns"
 		  << std::endl;
-	std::cout << "Starting send loop at NTP time: " << ntp_time << " ns"
+	std::cout << "Starting send loop at: " << start_time << " ns"
 		  << std::endl;
-	std::cout << "Ending white at NTP time: " << end_second << " ns"
+	std::cout << "      Ending white at: " << end_second << " ns"
 		  << std::endl;
-	std::cout << "Difference " << ntp_time - start_second << std::endl;
 
 	// We will send video frames until exit
 	for (int idx =0; !exit_loop; idx++) {
@@ -487,15 +486,23 @@ int main(int argc, char *argv[])
 					 << std::endl;
 			conn_count = last_conn_count;
 		}
+
 		// Determine if the frame should be black or white based on the output type
 		bool white = false;
 		bool sound = false;
 
-		uint64_t frame_ns = ntp_time + (idx * frame_time);
+		frame_time = (uint64_t)(frame_time / 100000) *
+			     100000; // adjust frame time to milliseconds
+
+		uint64_t frame_ns =
+			start_time + ((uint64_t)idx * frame_time);
 
 		if (output_type == OutputType::BW) {
 			white = (frame_ns >= start_second) && (frame_ns <= end_second);
-
+			/* if (white)
+				std::cout << "white: idx=" << idx
+					  << ", frame_ns=" << frame_ns << std::endl;
+			*/
 			// Make audio follow the white interval as well
 			sound = white;
 		} else if (output_type == OutputType::Black) {
@@ -515,8 +522,8 @@ int main(int argc, char *argv[])
 		if (last_white && !white) {
 			start_second += (ns_per_sec * 4);
 			end_second = start_second + ns_per_sec;
-			std::cout << "New white" << start_second << " ns"
-				  << std::endl;	
+			//std::cout << "New white" << start_second << " ns"
+			//	  << std::endl;	
 		}
 
 		// Fill audio
@@ -597,8 +604,6 @@ int main(int argc, char *argv[])
 		NDIlib_send_send_video_v2(pNDI_send, &NDI_video_frame);
 
 		last_white = white;
-
-		// ntp_time = getAccurateNetworkTime();
 	}
 
 	if (timer_thread_started) {

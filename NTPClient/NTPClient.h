@@ -80,9 +80,8 @@ public:
 
 	bool initialize();
 
-	// Update base sync if diff (ns) is better
-	void syncSystemToNTP(uint64_t diff, uint64_t systemTime,
-			     uint64_t ntpTime);
+	// Update diff
+	void syncSystemToNTP(uint64_t diff);
 
 	// Calculate NTP time (ns since Unix epoch) based on current system time and stored base
 	uint64_t calcNTPTimeAtSystemTime(uint64_t sysTime);
@@ -106,6 +105,8 @@ private:
 	// Initialize Winsock and resolve server address
 
 	uint64_t ntpToUint64(uint32_t seconds, uint32_t fraction);
+	void uint64ToNTP(uint64_t nanoseconds, uint32_t &seconds,
+			 uint32_t &fraction);
 	int64_t ntpDiff(uint64_t a, uint64_t b);
 };
 
