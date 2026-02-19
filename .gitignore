@@ -45,3 +45,7 @@ ImageExtractor/x64/Debug/CR3toRGBImage.obj
 ImageExtractor/x64/Debug/ImageExtractor.log
 ImageExtractor/x64/Debug/ImageExtractor.obj
 ImageExtractor/x64/Debug/RGBImage.obj
+/NTPClient/x64/Debug/NTPClient.log
+/NTPClient/x64/Debug/NTPClient.obj
+/NTPClient/x64/Debug/NTPClient.pch
+/NTPClient/x64/Debug/pch.obj

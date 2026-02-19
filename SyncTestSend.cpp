@@ -622,13 +622,15 @@ int main(int argc, char *argv[])
 		std::cout << " " << argv[i];
 	}
 	std::cout << std::endl;
-	NDIlib_send_create_t NDI_send_create_desc;
+	NDIlib_send_create_t NDI_send_create_desc{};
 	switch (output_type) {
 	case OutputType::Black:
 		NDI_send_create_desc.p_ndi_name = "Sync Test Black";
 		break;
 	case OutputType::White:
-		NDI_send_create_desc.p_ndi_name = "Sync Test White";
+		char name2[256];
+		sprintf_s<256>(name2, "Move Test (%s)", config_name.c_str());
+		NDI_send_create_desc.p_ndi_name = name2;
 		break;
 	case OutputType::BW:
 	default:
@@ -674,6 +676,9 @@ int main(int argc, char *argv[])
 		  << std::endl;
 	std::cout << "      Ending white at: " << end_second << " ns"
 		  << std::endl;
+
+	int boxx = 0;
+	int boxy = 0;
 
 	// We will send video frames until exit
 	for (int idx =0; !exit_loop; idx++) {
@@ -810,8 +815,44 @@ int main(int argc, char *argv[])
 			//32-bit packed formats (BGRA/RGBA/...)
 			uint32_t v = (uint32_t)(white ? white_color
 							    : black_color);
-			std::fill_n((uint32_t *)NDI_video_frame.p_data,
+			// If requested white-only mode but format is BGRA, draw a small white rectangle centered on black background
+			if (output_type == OutputType::White && f == NDIlib_FourCC_type_BGRA) {
+				// Fill background with black
+				uint32_t blackv = (uint32_t)black_color;
+				uint32_t *pixels = (uint32_t *)NDI_video_frame.p_data;
+				size_t total_pixels = (size_t)xres * (size_t)yres;
+				std::fill_n(pixels, total_pixels, blackv);
+
+				// Draw a10x10 white rectangle centered
+				const int rect_w =20;
+				const int rect_h =20;
+				int left = (int)boxx;
+				int top = (int)boxy;
+				if (left <0) left =0;
+				if (top <0) top =0;
+				uint32_t whitev = (uint32_t)white_color;
+				for (int ry =0; ry < rect_h; ++ry) {
+					int y = top + ry;
+					if (y <0 || y >= yres) continue;
+					uint32_t *rowPtr = pixels + (size_t)y * (size_t)xres;
+					for (int rx =0; rx < rect_w; ++rx) {
+						int x = left + rx;
+						if (x <0 || x >= xres) continue;
+						rowPtr[x] = whitev;
+					}
+				}
+				boxx += rect_w;
+				if (boxx > xres) {
+					boxx = 0;
+					boxy += rect_h;
+					if (boxy > yres) {
+						boxy = 0;
+					}
+				}
+			} else {
+				std::fill_n((uint32_t *)NDI_video_frame.p_data,
 					(size_t)xres * (size_t)yres, v);
+			}
 		}
 		
 		NDI_video_frame.timestamp = frame_ns / 100;
