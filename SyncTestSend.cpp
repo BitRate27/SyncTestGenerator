@@ -24,7 +24,221 @@
 #include <iostream>
 #include <stdexcept>
 #include <windows.h>
-#include "NTPClient/NTPClient.h"
+#include <ws2tcpip.h>
+
+#pragma comment(lib, "ws2_32.lib")
+
+class NTPClient {
+private:
+	// NTP packet structure (48 bytes)
+	struct NTPPacket {
+		uint8_t li_vn_mode;      // Leap indicator, Version, Mode
+		uint8_t stratum;         // Stratum level
+		uint8_t poll;            // Poll interval
+		uint8_t precision;       // Precision
+		uint32_t rootDelay;      // Root delay
+		uint32_t rootDispersion; // Root dispersion
+		uint32_t refId;          // Reference ID
+		uint32_t refTm_s;        // Reference time-stamp seconds
+		uint32_t refTm_f;        // Reference time-stamp fraction
+		uint32_t origTm_s;       // Originate time-stamp seconds
+		uint32_t origTm_f;       // Originate time-stamp fraction
+		uint32_t rxTm_s;         // Receive time-stamp seconds
+		uint32_t rxTm_f;         // Receive time-stamp fraction
+		uint32_t txTm_s;         // Transmit time-stamp seconds
+		uint32_t txTm_f;         // Transmit time-stamp fraction
+	};
+
+	static constexpr uint32_t NTP_TIMESTAMP_DELTA = 2208988800ull;
+	static constexpr int NTP_PORT = 123;
+	static constexpr int TIMEOUT_SECONDS = 5;
+
+	// Convert network byte order to host byte order
+	uint32_t ntohl_custom(uint32_t netlong) { return ntohl(netlong); }
+
+	// Convert NTP timestamp to nanoseconds since Unix epoch
+	int64_t ntpTimestampToNanoseconds(uint32_t seconds, uint32_t fraction)
+	{
+		// Convert NTP seconds to Unix seconds
+		int64_t unixSeconds =
+			static_cast<int64_t>(seconds) - NTP_TIMESTAMP_DELTA;
+
+		// Convert fraction to nanoseconds
+		// NTP fraction is in units of 1/(2^32) seconds
+		// To convert to nanoseconds: (fraction * 1e9) / 2^32
+		int64_t nanoseconds =
+			(static_cast<int64_t>(fraction) * 1000000000LL) >> 32;
+
+		// Total nanoseconds since Unix epoch
+		return (unixSeconds * 1000000000LL) + nanoseconds;
+	}
+
+public:
+	NTPClient()
+	{
+		// Initialize Winsock
+		WSADATA wsaData;
+		int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
+		if (result != 0) {
+			throw std::runtime_error("WSAStartup failed: " +
+						 std::to_string(result));
+		}
+	}
+
+	~NTPClient() { WSACleanup(); }
+
+	// Get NTP time in nanoseconds from specified server
+	int64_t getTimeNanoseconds(const std::string &serverDomain)
+	{
+		SOCKET sockfd = INVALID_SOCKET;
+
+		try {
+			// Resolve hostname
+			struct addrinfo hints = {0};
+			hints.ai_family = AF_INET;
+			hints.ai_socktype = SOCK_DGRAM;
+			hints.ai_protocol = IPPROTO_UDP;
+
+			struct addrinfo *result = nullptr;
+			int status =
+				getaddrinfo(serverDomain.c_str(),
+					    std::to_string(NTP_PORT).c_str(),
+					    &hints, &result);
+			if (status != 0) {
+				throw std::runtime_error(
+					"Failed to resolve hostname: ");
+			}
+
+			// Create socket
+			sockfd = socket(result->ai_family, result->ai_socktype,
+					result->ai_protocol);
+			if (sockfd == INVALID_SOCKET) {
+				freeaddrinfo(result);
+				throw std::runtime_error(
+					"Failed to create socket: " +
+					std::to_string(WSAGetLastError()));
+			}
+
+			// Set receive timeout
+			DWORD timeout = TIMEOUT_SECONDS * 1000;
+			setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO,
+				   reinterpret_cast<const char *>(&timeout),
+				   sizeof(timeout));
+
+			// Prepare NTP request packet
+			NTPPacket packet = {0};
+			packet.li_vn_mode =
+				0x1B; // LI = 0, VN = 3, Mode = 3 (client)
+
+			// Send NTP request
+			int sendResult = sendto(
+				sockfd, reinterpret_cast<const char *>(&packet),
+				sizeof(packet), 0, result->ai_addr,
+				static_cast<int>(result->ai_addrlen));
+
+			freeaddrinfo(result);
+
+			if (sendResult == SOCKET_ERROR) {
+				throw std::runtime_error(
+					"Failed to send NTP request: " +
+					std::to_string(WSAGetLastError()));
+			}
+
+			// Receive NTP response
+			NTPPacket response = {0};
+			int recvResult = recv(
+				sockfd, reinterpret_cast<char *>(&response),
+				sizeof(response), 0);
+
+			if (recvResult == SOCKET_ERROR) {
+				int error = WSAGetLastError();
+				if (error == WSAETIMEDOUT) {
+					throw std::runtime_error(
+						"NTP request timed out");
+				}
+				throw std::runtime_error(
+					"Failed to receive NTP response: " +
+					std::to_string(error));
+			}
+
+			// Extract transmit timestamp from response
+			uint32_t txTm_s = ntohl_custom(response.txTm_s);
+			uint32_t txTm_f = ntohl_custom(response.txTm_f);
+
+			// Close socket
+			closesocket(sockfd);
+
+			// Convert to nanoseconds
+			return ntpTimestampToNanoseconds(txTm_s, txTm_f);
+
+		} catch (...) {
+			if (sockfd != INVALID_SOCKET) {
+				closesocket(sockfd);
+			}
+			throw;
+		}
+	}
+
+	// Helper function to convert nanoseconds to readable time string
+	std::string nanosecondsToString(int64_t nanoseconds)
+	{
+		int64_t seconds = nanoseconds / 1000000000LL;
+		int64_t nanos = nanoseconds % 1000000000LL;
+
+		time_t timeValue = static_cast<time_t>(seconds);
+		struct tm timeInfo;
+
+		if (gmtime_s(&timeInfo, &timeValue) != 0) {
+			return "Invalid time";
+		}
+
+		char buffer[100];
+		strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S",
+			 &timeInfo);
+
+		return std::string(buffer) + "." +
+		       std::to_string(nanos).insert(
+			       0, 9 - std::to_string(nanos).length(), '0') +
+		       " UTC";
+	}
+};
+/*
+// Example usage
+int main()
+{
+	try {
+		NTPClient client;
+
+		// Get time from pool.ntp.org
+		std::string server = "pool.ntp.org";
+		std::cout << "Querying NTP server: " << server << std::endl;
+
+		int64_t timeNanoseconds = client.getTimeNanoseconds(server);
+
+		std::cout << "NTP time (nanoseconds): " << timeNanoseconds
+			  << std::endl;
+		std::cout << "Human readable: "
+			  << client.nanosecondsToString(timeNanoseconds)
+			  << std::endl;
+
+		// Try other servers
+		std::cout << "\n--- Testing with time.google.com ---"
+			  << std::endl;
+		timeNanoseconds = client.getTimeNanoseconds("time.google.com");
+		std::cout << "NTP time (nanoseconds): " << timeNanoseconds
+			  << std::endl;
+		std::cout << "Human readable: "
+			  << client.nanosecondsToString(timeNanoseconds)
+			  << std::endl;
+
+	} catch (const std::exception &e) {
+		std::cerr << "Error: " << e.what() << std::endl;
+		return 1;
+	}
+
+	return 0;
+}
+*/
 
 using json = nlohmann::json;
 #define M_PI 3.14159265358f
@@ -384,9 +598,16 @@ int main(int argc, char *argv[])
 	long long nanoseconds = (long long)ts.tv_sec *1000000000LL + ts.tv_nsec;
 
 	uint64_t frame_time = (uint64_t)(1000000000ULL * frame_rate_D / frame_rate_N);
-	frame_time = 30000000ULL; // Force shorter timestamps for testing
+	// frame_time = 33333000ULL; // Force shorter timestamps for testing
 
-	auto start_time = use_ntp ? getAccurateNetworkTime("pool.ntp.org",123) : nanoseconds;
+	NTPClient client;
+
+	// Get time from pool.ntp.org
+	std::string server = "pool.ntp.org";
+	std::cout << "Querying NTP server: " << server << std::endl;
+
+	auto start_time = use_ntp ? client.getTimeNanoseconds(server)
+				  : nanoseconds;
 
 	auto last_sync_time = start_time;
 
