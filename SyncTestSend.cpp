@@ -303,8 +303,14 @@ NDIlib_FourCC_video_type_e get_format_enum(int fmt)
 	return NDIlib_FourCC_type_UYVY;
 }
 
-void get_black_and_white_color(int format, uint32_t &white, uint32_t &black)
+void get_colors(int format, char *mcolor, uint32_t &white, uint32_t &black,
+		uint32_t &move)
 {
+	std::string mc = (mcolor ? std::string(mcolor) : std::string());
+	// normalize to lower-case
+	std::transform(mc.begin(), mc.end(), mc.begin(),
+		       [](unsigned char c) { return std::tolower(c); });
+
 	switch (format) {
 	case NDIlib_FourCC_type_UYVY:
 		white = (128 | (235 << 8));
@@ -313,7 +319,7 @@ void get_black_and_white_color(int format, uint32_t &white, uint32_t &black)
 	case NDIlib_FourCC_type_UYVA:
 		// Use fully opaque alpha (255) so white appears white when composited
 		white = (128 | (235 << 8) | (255u << 24)); // Alpha =255
-		black = (128 | (16 << 8) | (255u << 24)); // Alpha =255
+		black = (128 | (16 << 8) | (255u << 24));  // Alpha =255
 		break;
 	case NDIlib_FourCC_type_BGRA:
 	case NDIlib_FourCC_type_RGBA:
@@ -323,9 +329,59 @@ void get_black_and_white_color(int format, uint32_t &white, uint32_t &black)
 		black = 0x00000000; // Blue=0, Green=0, Red=0, Alpha=0
 		break;
 	default:
+		white = 0xFFFFFFFF;
+		black = 0x00000000;
 		break;
 	}
+
+	// Default move equals white
+	move = white;
+
+	// Determine move color based on mc (white, blue, green, red)
+	if (mc == "white") {
+		move = white;
+	} else if (mc == "blue") {
+		if (format == NDIlib_FourCC_type_BGRA) {
+			// BGRA:0xAARRGGBB -> opaque blue = A=255,R=0,G=0,B=255
+			move = 0xFF0000FFu;
+		} else if (format == NDIlib_FourCC_type_UYVY ||
+			   format == NDIlib_FourCC_type_UYVA) {
+			// Approximate blue in YUV (UYVY stores U,Y pairs). Use U=90, Y=41 -> pack as (U | (Y<<8))
+			move = (90u | (41u << 8));
+			if (format == NDIlib_FourCC_type_UYVA)
+				move |= (255u << 24);
+		} else {
+			move = white;
+		}
+	} else if (mc == "green") {
+		if (format == NDIlib_FourCC_type_BGRA) {
+			// opaque green: A=255,R=0,G=255,B=0 ->0xFF00FF00
+			move = 0xFF00FF00u;
+		} else if (format == NDIlib_FourCC_type_UYVY ||
+			   format == NDIlib_FourCC_type_UYVA) {
+			// Approximate green in YUV: U=43, Y=182
+			move = (43u | (182u << 8));
+			if (format == NDIlib_FourCC_type_UYVA)
+				move |= (255u << 24);
+		} else {
+			move = white;
+		}
+	} else if (mc == "red") {
+		if (format == NDIlib_FourCC_type_BGRA) {
+			// opaque red: A=255,R=255,G=0,B=0 ->0xFFFF0000
+			move = 0xFFFF0000u;
+		} else if (format == NDIlib_FourCC_type_UYVY ||
+			   format == NDIlib_FourCC_type_UYVA) {
+			// Approximate red in YUV: U=84, Y=76
+			move = (84u | (76u << 8));
+			if (format == NDIlib_FourCC_type_UYVA)
+				move |= (255u << 24);
+		} else {
+			move = white;
+		}
+	}
 }
+
 void obs_sync_debug_log_video_time(const char *message, uint64_t timestamp,
 				   uint8_t *data)
 {
@@ -365,7 +421,7 @@ static void sigint_handler(int)
 {
 	exit_loop = true;
 }
-enum class OutputType { Black, White, BW };
+enum class OutputType { Black, White, BW, Move };
 enum class AudioType { Zero, Peak, Spike };
 
 static inline uint64_t util_mul_div64(uint64_t num, uint64_t mul, uint64_t div)
@@ -434,7 +490,9 @@ int main(int argc, char *argv[])
 	std::string config_file;
 	uint32_t white_color = (128 | (235 << 8));
 	uint32_t black_color = (128 | (16 << 8));
+	uint32_t move_color = 0xFFFFFFFF;
 	bool use_ntp = false;
+	std::string color_arg;
 
 	// Parse command line arguments to find /duration=
 	for (int i = 1; i < argc; ++i) {
@@ -454,7 +512,11 @@ int main(int argc, char *argv[])
 				output_type = OutputType::White;
 			} else if (output_arg == "BW") {
 				output_type = OutputType::BW;
+			} else if (output_arg == "Move") {
+				output_type = OutputType::Move;
 			}
+		} else if (strncmp(argv[i], "-color=", 7) == 0) {
+			color_arg = argv[i] + 7;
 		} else if (strncmp(argv[i], "-setcode", 8) == 0) {
 			setcode = true;
 		} else if (strncmp(argv[i], "-sendnoconn", 10) == 0) {
@@ -506,8 +568,7 @@ int main(int argc, char *argv[])
 	    }
     }
 
-
-	get_black_and_white_color(format, white_color, black_color);
+	get_colors(format, (char *)color_arg.c_str(), white_color, black_color, move_color);
 
 	std::string config_name = "DefaultName"; // Fallback name
 	if (!config_file.empty()) {
@@ -627,11 +688,19 @@ int main(int argc, char *argv[])
 	case OutputType::Black:
 		NDI_send_create_desc.p_ndi_name = "Sync Test Black";
 		break;
-	case OutputType::White:
+	case OutputType::White: {
 		char name2[256];
-		sprintf_s<256>(name2, "Move Test (%s)", config_name.c_str());
+		sprintf_s<256>(name2, "Sync Test White (%s)",
+			       config_name.c_str());
 		NDI_send_create_desc.p_ndi_name = name2;
 		break;
+	}
+	case OutputType::Move: {
+		char name2[256];
+		sprintf_s<256>(name2, "Move (%s)", config_name.c_str());
+		NDI_send_create_desc.p_ndi_name = name2;
+		break;
+	}
 	case OutputType::BW:
 	default:
 		char name[256];
@@ -734,7 +803,7 @@ int main(int argc, char *argv[])
 		} else if (output_type == OutputType::Black) {
 			white = false;
 			sound = false;
-		} else if (output_type == OutputType::White) {
+		} else {
 			white = true;
 			sound = true;
 		}
@@ -816,7 +885,7 @@ int main(int argc, char *argv[])
 			uint32_t v = (uint32_t)(white ? white_color
 							    : black_color);
 			// If requested white-only mode but format is BGRA, draw a small white rectangle centered on black background
-			if (output_type == OutputType::White && f == NDIlib_FourCC_type_BGRA) {
+			if (output_type == OutputType::Move && f == NDIlib_FourCC_type_BGRA) {
 				// Fill background with black
 				uint32_t blackv = (uint32_t)black_color;
 				uint32_t *pixels = (uint32_t *)NDI_video_frame.p_data;
@@ -824,13 +893,13 @@ int main(int argc, char *argv[])
 				std::fill_n(pixels, total_pixels, blackv);
 
 				// Draw a10x10 white rectangle centered
-				const int rect_w =20;
-				const int rect_h =20;
+				const int rect_w =40;
+				const int rect_h =40;
 				int left = (int)boxx;
 				int top = (int)boxy;
 				if (left <0) left =0;
 				if (top <0) top =0;
-				uint32_t whitev = (uint32_t)white_color;
+				uint32_t movev = (uint32_t)move_color;
 				for (int ry =0; ry < rect_h; ++ry) {
 					int y = top + ry;
 					if (y <0 || y >= yres) continue;
@@ -838,7 +907,7 @@ int main(int argc, char *argv[])
 					for (int rx =0; rx < rect_w; ++rx) {
 						int x = left + rx;
 						if (x <0 || x >= xres) continue;
-						rowPtr[x] = whitev;
+						rowPtr[x] = movev;
 					}
 				}
 				boxx += rect_w;
