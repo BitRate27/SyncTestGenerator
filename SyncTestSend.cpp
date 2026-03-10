@@ -892,13 +892,20 @@ int main(int argc, char *argv[])
 				size_t total_pixels = (size_t)xres * (size_t)yres;
 				std::fill_n(pixels, total_pixels, blackv);
 
-				// Draw a10x10 white rectangle centered
+				// Draw a rectangle centered
 				const int rect_w =40;
 				const int rect_h =40;
-				int left = (int)boxx;
-				int top = (int)boxy;
-				if (left <0) left =0;
-				if (top <0) top =0;
+				const int frames_per_y = xres / rect_w;
+				const int frames_per_x = yres / rect_h;
+				const uint64_t frames_per_image = frames_per_x * frames_per_y;
+				uint64_t ns_per_y = frame_time * frames_per_y;
+				uint64_t frame_ns_mod =
+					frame_ns %
+					(frames_per_image * frame_time);
+				uint64_t top = (uint64_t)(frame_ns_mod / ns_per_y) * rect_h;
+				uint64_t left =
+					(int)((frame_ns_mod - ((uint64_t)(frame_ns_mod / ns_per_y) * ns_per_y)) / frame_time) * rect_w;
+
 				uint32_t movev = (uint32_t)move_color;
 				for (int ry =0; ry < rect_h; ++ry) {
 					int y = top + ry;
@@ -908,14 +915,6 @@ int main(int argc, char *argv[])
 						int x = left + rx;
 						if (x <0 || x >= xres) continue;
 						rowPtr[x] = movev;
-					}
-				}
-				boxx += rect_w;
-				if (boxx > xres) {
-					boxx = 0;
-					boxy += rect_h;
-					if (boxy > yres) {
-						boxy = 0;
 					}
 				}
 			} else {
