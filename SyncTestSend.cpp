@@ -786,11 +786,13 @@ int main(int argc, char *argv[])
 		bool white = false;
 		bool sound = false;
 
-		frame_time = (uint64_t)(frame_time / 100000) *
-			     100000; // adjust frame time to milliseconds
-
-		uint64_t frame_ns =
-			start_time + ((uint64_t)idx * frame_time);
+		//frame_time = (uint64_t)(frame_time / 100000) *
+		//	     100000; // adjust frame time to milliseconds
+		timespec_get(&ts, TIME_UTC);
+		nanoseconds =
+			(long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+		uint64_t frame_ns = nanoseconds;
+		//	start_time + ((uint64_t)idx * frame_time);
 
 		if (output_type == OutputType::BW) {
 			white = (frame_ns >= start_second) && (frame_ns <= end_second);
