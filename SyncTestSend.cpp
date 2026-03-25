@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <string>
 #include <thread>
@@ -243,6 +244,7 @@ int main()
 using json = nlohmann::json;
 #define M_PI 3.14159265358f
 
+#define PROFILE true
 #ifdef _WIN32
 #ifdef _WIN64
 #pragma comment(lib, "Processing.NDI.Lib.x64.lib")
@@ -457,8 +459,68 @@ uint64_t os_gettime_ns(void)
 			      get_clockfreq());
 }
 
+class PerfTimer {
+public:
+	explicit PerfTimer(const char *name)
+		: name_(name),
+		  frame_counter_(0),
+		  report_interval_(100),
+		  min_ns_(INT64_MAX),
+		  max_ns_(0),
+		  sum_ns_(0)
+	{
+	}
+
+	void start()
+	{
+		start_time_ = std::chrono::high_resolution_clock::now();
+	}
+
+	void end()
+	{
+		auto t1 = std::chrono::high_resolution_clock::now();
+		int64_t elapsed =
+			std::chrono::duration_cast<std::chrono::nanoseconds>(
+				t1 - start_time_)
+				.count();
+		++frame_counter_;
+		sum_ns_ += (uint64_t)elapsed;
+		if (elapsed < min_ns_)
+			min_ns_ = elapsed;
+		if (elapsed > max_ns_)
+			max_ns_ = elapsed;
+
+		if (frame_counter_ >= report_interval_) {
+			double avg = static_cast<double>(sum_ns_) /
+				     static_cast<double>(frame_counter_);
+			std::cout << name_ << ": Performance (last "
+				  << report_interval_ << " frames): "
+				  << "min=" << min_ns_ << " ns, "
+				  << "max=" << max_ns_ << " ns, "
+				  << "avg=" << avg << " ns" << std::endl;
+			// reset
+			frame_counter_ = 0;
+			sum_ns_ = 0;
+			min_ns_ = INT64_MAX;
+			max_ns_ = 0;
+		}
+	}
+
+private:
+	const std::string name_;
+	uint64_t frame_counter_;
+	const uint64_t report_interval_;
+	int64_t min_ns_;
+	int64_t max_ns_;
+	uint64_t sum_ns_;
+	std::chrono::high_resolution_clock::time_point start_time_;
+};
+
 int main(int argc, char *argv[])
 {
+	SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+
 #ifdef _WIN32
 	_set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
 
@@ -486,7 +548,6 @@ int main(int argc, char *argv[])
 
 	OutputType output_type = OutputType::BW;
 	bool setcode = false;
-	bool send_no_connection = false;
 	std::string config_file;
 	uint32_t white_color = (128 | (235 << 8));
 	uint32_t black_color = (128 | (16 << 8));
@@ -519,8 +580,6 @@ int main(int argc, char *argv[])
 			color_arg = argv[i] + 7;
 		} else if (strncmp(argv[i], "-setcode", 8) == 0) {
 			setcode = true;
-		} else if (strncmp(argv[i], "-sendnoconn", 10) == 0) {
-			send_no_connection = true;
 		} else if (strncmp(argv[i], "-ntp", 4) == 0) {
 			use_ntp = true;
 		} else if (strncmp(argv[i], "-config=", 8) == 0) {
@@ -532,43 +591,46 @@ int main(int argc, char *argv[])
 	int yres = 1080;
 	int frame_rate_N = 30000;
 	int frame_rate_D = 1000;
-    int format = NDIlib_FourCC_type_UYVY;
-
+	int format = NDIlib_FourCC_type_UYVY;
 
 	// If a config file is specified, parse it
-    if (!config_file.empty()) {
-	    try {
-		    std::ifstream file(config_file);
-		    if (!file.is_open()) {
-			    throw std::runtime_error(
-				    "Could not open config file: " +
-				    config_file);
-		    }
+	if (!config_file.empty()) {
+		try {
+			std::ifstream file(config_file);
+			if (!file.is_open()) {
+				throw std::runtime_error(
+					"Could not open config file: " +
+					config_file);
+			}
 
-		    json config;
-		    file >> config;
+			json config;
+			file >> config;
 
-		    // Read xres and yres from the JSON file
-		    if (config.contains("xres") && config.contains("yres")) {
-			    xres = config["xres"].get<int>();
-			    yres = config["yres"].get<int>();
-		    }
-		    if (config.contains("frame_rate_N") &&
-			config.contains("frame_rate_D")) {
-			    frame_rate_N = config["frame_rate_N"].get<int>();
-			    frame_rate_D = config["frame_rate_D"].get<int>();
-		    }
-		    if (config.contains("format")) {
-			    format = config["format"].get<int>();
-		    }
-	    } catch (const std::exception &e) {
-		    std::cerr << "Error reading config file: " << e.what()
-			      << std::endl;
-		    return 1;
-	    }
-    }
+			// Read xres and yres from the JSON file
+			if (config.contains("xres") &&
+			    config.contains("yres")) {
+				xres = config["xres"].get<int>();
+				yres = config["yres"].get<int>();
+			}
+			if (config.contains("frame_rate_N") &&
+			    config.contains("frame_rate_D")) {
+				frame_rate_N =
+					config["frame_rate_N"].get<int>();
+				frame_rate_D =
+					config["frame_rate_D"].get<int>();
+			}
+			if (config.contains("format")) {
+				format = config["format"].get<int>();
+			}
+		} catch (const std::exception &e) {
+			std::cerr << "Error reading config file: " << e.what()
+				  << std::endl;
+			return 1;
+		}
+	}
 
-	get_colors(format, (char *)color_arg.c_str(), white_color, black_color, move_color);
+	get_colors(format, (char *)color_arg.c_str(), white_color, black_color,
+		   move_color);
 
 	std::string config_name = "DefaultName"; // Fallback name
 	if (!config_file.empty()) {
@@ -582,7 +644,8 @@ int main(int argc, char *argv[])
 				config_name = config_file.substr(0, ext_pos);
 			} else {
 				// Start after separator
-				config_name = config_file.substr(sep_pos +1, ext_pos - (sep_pos +1));
+				config_name = config_file.substr(
+					sep_pos + 1, ext_pos - (sep_pos + 1));
 			}
 		} else {
 			// No .cfg extension found — just extract filename portion after last separator
@@ -590,7 +653,7 @@ int main(int argc, char *argv[])
 			if (sep_pos == std::string::npos)
 				config_name = config_file;
 			else
-				config_name = config_file.substr(sep_pos +1);
+				config_name = config_file.substr(sep_pos + 1);
 		}
 	}
 	std::cout << "Config name: " << config_name.c_str() << std::endl;
@@ -613,52 +676,55 @@ int main(int argc, char *argv[])
 
 	// Compute buffer sizes based on format
 	NDIlib_FourCC_video_type_e f = NDI_video_frame.FourCC;
-	size_t line_stride =0;
-	size_t plane1_size =0;
-	size_t alpha_plane_size =0;
-	size_t total_size =0;
+	size_t line_stride = 0;
+	size_t plane1_size = 0;
+	size_t alpha_plane_size = 0;
+	size_t total_size = 0;
 
 	if (f == NDIlib_FourCC_type_UYVY) {
-		line_stride = xres *2; //2 bytes per pixel (UYVY packed)
-		plane1_size = (size_t)xres * (size_t)yres *2;
+		line_stride = xres * 2; //2 bytes per pixel (UYVY packed)
+		plane1_size = (size_t)xres * (size_t)yres * 2;
 		total_size = plane1_size;
 	} else if (f == NDIlib_FourCC_type_UYVA) {
 		// UYVA: first a UYVY plane (2 bytes per pixel), then an alpha plane (1 byte per pixel)
-		line_stride = xres *2;
-		plane1_size = (size_t)xres * (size_t)yres *2;
-		alpha_plane_size = (size_t)xres * (size_t)yres; // one byte per pixel
+		line_stride = xres * 2;
+		plane1_size = (size_t)xres * (size_t)yres * 2;
+		alpha_plane_size =
+			(size_t)xres * (size_t)yres; // one byte per pixel
 		total_size = plane1_size + alpha_plane_size;
 	} else {
 		//32-bit packed formats:4 bytes per pixel
-		line_stride = xres *4;
-		plane1_size = (size_t)xres * (size_t)yres *4;
+		line_stride = xres * 4;
+		plane1_size = (size_t)xres * (size_t)yres * 4;
 		total_size = plane1_size;
 	}
 
 	NDI_video_frame.line_stride_in_bytes = (int)line_stride;
 	NDI_video_frame.p_data = (uint8_t *)malloc(total_size);
 	if (!NDI_video_frame.p_data) {
-		std::cerr << "Failed to allocate video buffer of size " << total_size << std::endl;
+		std::cerr << "Failed to allocate video buffer of size "
+			  << total_size << std::endl;
 		return 0;
 	}
 
 	// Create an audio buffer
 	NDIlib_audio_frame_v2_t NDI_audio_frame;
 	NDI_audio_frame.sample_rate = audio_rate;
-	NDI_audio_frame.no_channels =2;
+	NDI_audio_frame.no_channels = 2;
 	NDI_audio_frame.no_samples = audio_no_samples;
-	NDI_audio_frame.p_data = (float *)malloc(sizeof(float) * audio_no_samples *2);
-	NDI_audio_frame.channel_stride_in_bytes = sizeof(float) * audio_no_samples;
+	NDI_audio_frame.p_data =
+		(float *)malloc(sizeof(float) * audio_no_samples * 2);
+	NDI_audio_frame.channel_stride_in_bytes =
+		sizeof(float) * audio_no_samples;
 
-	int64_t sine_sample =0;
+	int64_t sine_sample = 0;
 	bool last_white = false;
 	bool last_sound = false;
-	struct timespec ts;
 
-	timespec_get(&ts, TIME_UTC);
-	long long nanoseconds = (long long)ts.tv_sec *1000000000LL + ts.tv_nsec;
+	long long nanoseconds = os_gettime_ns();
 
-	uint64_t frame_time = (uint64_t)(1000000000ULL * frame_rate_D / frame_rate_N);
+	uint64_t frame_time =
+		(uint64_t)(1000000000ULL * frame_rate_D / frame_rate_N);
 	// frame_time = 33333000ULL; // Force shorter timestamps for testing
 
 	NTPClient client;
@@ -674,8 +740,9 @@ int main(int argc, char *argv[])
 
 	// Print the resolution for debugging
 	std::cout << "Video resolution: " << xres << "x" << yres << std::endl;
-	std::cout << "Frame rate: " << frame_rate_N << "/" << frame_rate_D << std::endl;
-	std::cout << "Frame time (ns): " << frame_time << std::endl;	
+	std::cout << "Frame rate: " << frame_rate_N << "/" << frame_rate_D
+		  << std::endl;
+	std::cout << "Frame time (ns): " << frame_time << std::endl;
 	std::cout << "Format: " << format << std::endl;
 	std::cout << "Audio no samples: " << audio_no_samples << std::endl;
 	std::cout << "Command line parameters:";
@@ -708,7 +775,7 @@ int main(int argc, char *argv[])
 		NDI_send_create_desc.p_ndi_name = name;
 		break;
 	}
-	NDI_send_create_desc.clock_audio = true;
+	NDI_send_create_desc.clock_audio = false;
 	NDI_send_create_desc.clock_video = true;
 
 	char message[256];
@@ -724,12 +791,13 @@ int main(int argc, char *argv[])
 	}
 
 	// Track last connection check to avoid calling API too often
-	auto last_conn_check = std::chrono::steady_clock::now() - std::chrono::milliseconds(500);
+	auto last_conn_check = std::chrono::steady_clock::now() -
+			       std::chrono::milliseconds(500);
 	uint32_t last_conn_count = 0;
 	uint32_t conn_count = 0;
 
-	std::cout << "Waiting for connection on "
-		  << NDI_send_create_desc.p_ndi_name << "..." << std::endl;
+	std::cout << "Sending on " << NDI_send_create_desc.p_ndi_name << "..."
+		  << std::endl;
 
 	const uint64_t ns_per_sec = 1000000000ULL;
 
@@ -739,48 +807,40 @@ int main(int argc, char *argv[])
 	last_white = true;
 	start_time = start_second;
 
-	std::cout << "      White starts at: " << start_second << " ns"
-		  << std::endl;
-	std::cout << "Starting send loop at: " << start_time << " ns"
-		  << std::endl;
-	std::cout << "      Ending white at: " << end_second << " ns"
-		  << std::endl;
+	if (output_type == OutputType::BW) {
+		std::cout << "      White starts at: " << start_second << " ns"
+			  << std::endl;
+		std::cout << "Starting send loop at: " << start_time << " ns"
+			  << std::endl;
+		std::cout << "      Ending white at: " << end_second << " ns"
+			  << std::endl;
+	}
 
 	int boxx = 0;
 	int boxy = 0;
 
+	// Prepare optimized buffers for Move mode when using32-bit BGRA frames
+	const int move_rect_w = 40;
+	const int move_rect_h = 40;
+	const size_t total_pixels = (size_t)xres * (size_t)yres;
+	std::vector<uint32_t> black_pixels; // filled once with black
+	std::vector<uint32_t> rect_pixels;  // filled once with move color
+	int prev_left = -1, prev_top = -1;
+	bool move_buffers_prepared = false;
+
+	// Perf timer instance
+	PerfTimer perf("Frame Rendering Time");
+	PerfTimer perfv(" NDI Send Video Time");
+	PerfTimer perfa(" NDI Send Audio Time");
+	PerfTimer perfl("  NDI Send Loop Time");
+
+	uint64_t send_ts = os_gettime_ns();
+
+	uint64_t frame_index = start_time / frame_time;
+
 	// We will send video frames until exit
-	for (int idx =0; !exit_loop; idx++) {
-		if (!send_no_connection) { 
-			// Periodically (every500 ms) check the number of connections. If zero, skip sending.
-			auto now_check = std::chrono::steady_clock::now();
-			if (now_check - last_conn_check >=
-			 std::chrono::milliseconds(500)) {
-				last_conn_count =
-					NDIlib_send_get_no_connections(
-						pNDI_send,10);
-				last_conn_check = now_check;
-			}
-			if (last_conn_count ==0) {
-				// No receivers connected - skip sending this iteration to avoid unnecessary work
-				if (conn_count >0) {
-					std::cout
-						<< "No receivers connected, pausing send."
-						<< std::endl;
-					exit_loop = true;
-				}
-				std::this_thread::sleep_for(
-					std::chrono::milliseconds(10));
-				conn_count =0;
-				continue;
-			}
-			if (last_conn_count != conn_count)
-				std::cout << "Connections changed: "
-					 << last_conn_count
-					 << " receivers connected."
-					 << std::endl;
-			conn_count = last_conn_count;
-		}
+	for (int idx = 0; !exit_loop; idx++) {
+		if (PROFILE) perfl.start();
 
 		// Determine if the frame should be black or white based on the output type
 		bool white = false;
@@ -788,14 +848,14 @@ int main(int argc, char *argv[])
 
 		//frame_time = (uint64_t)(frame_time / 100000) *
 		//	     100000; // adjust frame time to milliseconds
-		timespec_get(&ts, TIME_UTC);
-		nanoseconds =
-			(long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-		uint64_t frame_ns = nanoseconds;
-		//	start_time + ((uint64_t)idx * frame_time);
+		nanoseconds = os_gettime_ns();
+
+		uint64_t frame_ns = static_cast<uint64_t>(nanoseconds);
+		
 
 		if (output_type == OutputType::BW) {
-			white = (frame_ns >= start_second) && (frame_ns <= end_second);
+			white = (frame_ns >= start_second) &&
+				(frame_ns <= end_second);
 			/* if (white)
 				std::cout << "white: idx=" << idx
 					  << ", frame_ns=" << frame_ns << std::endl;
@@ -820,111 +880,221 @@ int main(int argc, char *argv[])
 			start_second += (ns_per_sec * 4);
 			end_second = start_second + ns_per_sec;
 			//std::cout << "New white" << start_second << " ns"
-			//	  << std::endl;	
+			//	  << std::endl;
 		}
 
+		if (PROFILE) perfa.start();
 		// Fill audio
-		for (int ch =0; ch <2; ch++) {
-			float *p_ch = (float *)((uint8_t *)NDI_audio_frame.p_data + ch * NDI_audio_frame.channel_stride_in_bytes);
-			const float frequency =400.0f;
+		for (int ch = 0; ch < 2; ch++) {
+			float *p_ch =
+				(float *)((uint8_t *)NDI_audio_frame.p_data +
+					  ch * NDI_audio_frame
+							  .channel_stride_in_bytes);
+			const float frequency = 400.0f;
 			const float sample_rate_f = (float)audio_rate;
-			float sine =2.0f; // amplitude
-			for (int sample_no = 0; sample_no < NDI_audio_frame.no_samples; sample_no++) {
-				float time = (sine_sample + sample_no) / sample_rate_f;
-				float sample = sinf(sine * M_PI * frequency * time);
-				if (sample ==0.0f) sample =1.0E-10f;
-				p_ch[sample_no] = (sound) ? sample :0.0f;
+			float sine = 2.0f; // amplitude
+			for (int sample_no = 0;
+			     sample_no < NDI_audio_frame.no_samples;
+			     sample_no++) {
+				float time = (sine_sample + sample_no) /
+					     sample_rate_f;
+				float sample =
+					sinf(sine * M_PI * frequency * time);
+				if (sample == 0.0f)
+					sample = 1.0E-10f;
+				p_ch[sample_no] = (sound) ? sample : 0.0f;
 			}
 			last_sound = sound;
 		}
-		
+
 		NDI_audio_frame.timestamp = frame_ns / 100;
 		NDI_audio_frame.timecode = NDIlib_send_timecode_synthesize;
-		if (setcode) NDI_audio_frame.timecode = (nanoseconds + (idx * frame_time))/100;
+		if (setcode)
+			NDI_audio_frame.timecode =
+				(nanoseconds + (idx * frame_time)) / 100;
 		sine_sample += NDI_audio_frame.no_samples;
 
 		// Log the audio time and audio frame
-		obs_sync_debug_log_audio_time(message, NDI_audio_frame.timestamp, NDI_audio_frame.p_data, NDI_audio_frame.no_samples, NDI_audio_frame.sample_rate);
+		if (output_type == OutputType::BW)
+			obs_sync_debug_log_audio_time(
+				message, NDI_audio_frame.timestamp,
+				NDI_audio_frame.p_data,
+				NDI_audio_frame.no_samples,
+				NDI_audio_frame.sample_rate);
 
 		NDIlib_send_send_audio_v2(pNDI_send, &NDI_audio_frame);
+		if (PROFILE) perfa.end();
+
+		// Start timing for this frame's video fill section
+		if (PROFILE) perf.start();
 
 		// Fill video buffer according to format
 		if (f == NDIlib_FourCC_type_UYVY) {
 			// UYVY packed8-bit: memory layout per2 pixels: U0 Y0 V0 Y1
-			uint8_t U = static_cast<uint8_t>((white ? white_color : black_color) &0xFF);
-			uint8_t Yv = static_cast<uint8_t>(((white ? white_color : black_color) >>8) &0xFF);
+			uint8_t U = static_cast<uint8_t>(
+				(white ? white_color : black_color) & 0xFF);
+			uint8_t Yv = static_cast<uint8_t>(
+				((white ? white_color : black_color) >> 8) &
+				0xFF);
 			uint8_t V = U; // neutral chroma
 			// fill row by row
 			uint8_t *p = (uint8_t *)NDI_video_frame.p_data;
-			for (int row =0; row < yres; ++row) {
+			for (int row = 0; row < yres; ++row) {
 				uint8_t *rowPtr = p + (size_t)row * line_stride;
-				for (int x =0; x < xres; x +=2) {
-					size_t idx = (size_t)x *2; //2 bytes per pixel
-					rowPtr[idx +0] = U; // U0
-					rowPtr[idx +1] = Yv; // Y0
-					rowPtr[idx +2] = V; // V0
-					rowPtr[idx +3] = Yv; // Y1
+				for (int x = 0; x < xres; x += 2) {
+					size_t idx = (size_t)x *
+						     2;      //2 bytes per pixel
+					rowPtr[idx + 0] = U; // U0
+					rowPtr[idx + 1] = Yv; // Y0
+					rowPtr[idx + 2] = V;  // V0
+					rowPtr[idx + 3] = Yv; // Y1
 				}
 			}
 		} else if (f == NDIlib_FourCC_type_UYVA) {
 			// UYVY plane then alpha plane
-			uint8_t v =
-				(uint8_t)(white ? (uint8_t)(white_color &
-								    0xFFFF)
-							: (uint8_t)(black_color &
-								    0xFFFF));
+			uint8_t v = (uint8_t)(white ? (uint8_t)(white_color &
+								0xFFFF)
+						    : (uint8_t)(black_color &
+								0xFFFF));
 			std::fill_n((uint8_t *)NDI_video_frame.p_data,
-					(size_t)xres * (size_t)yres, v);
+				    (size_t)xres * (size_t)yres, v);
 			uint8_t *alpha_ptr =
 				NDI_video_frame.p_data + plane1_size;
-			uint8_t a = (uint8_t)((white ? white_color
-							    : black_color) >>
-						    24);
-			std::fill_n(alpha_ptr,
-					(size_t)xres * (size_t)yres, a);
+			uint8_t a =
+				(uint8_t)((white ? white_color : black_color) >>
+					  24);
+			std::fill_n(alpha_ptr, (size_t)xres * (size_t)yres, a);
 		} else {
 			//32-bit packed formats (BGRA/RGBA/...)
-			uint32_t v = (uint32_t)(white ? white_color
-							    : black_color);
+			uint32_t v =
+				(uint32_t)(white ? white_color : black_color);
 			// If requested white-only mode but format is BGRA, draw a small white rectangle centered on black background
-			if (output_type == OutputType::Move && f == NDIlib_FourCC_type_BGRA) {
-				// Fill background with black
+			if (output_type == OutputType::Move &&
+			    f == NDIlib_FourCC_type_BGRA) {
+				uint32_t *pixels =
+					(uint32_t *)NDI_video_frame.p_data;
 				uint32_t blackv = (uint32_t)black_color;
-				uint32_t *pixels = (uint32_t *)NDI_video_frame.p_data;
-				size_t total_pixels = (size_t)xres * (size_t)yres;
-				std::fill_n(pixels, total_pixels, blackv);
-
-				// Draw a rectangle centered
-				const int rect_w =40;
-				const int rect_h =40;
-				const int frames_per_y = xres / rect_w;
-				const int frames_per_x = yres / rect_h;
-				const uint64_t frames_per_image = frames_per_x * frames_per_y;
-				uint64_t ns_per_y = frame_time * frames_per_y;
-				uint64_t frame_ns_mod =
-					frame_ns %
-					(frames_per_image * frame_time);
-				uint64_t top = (uint64_t)(frame_ns_mod / ns_per_y) * rect_h;
-				uint64_t left =
-					(int)((frame_ns_mod - ((uint64_t)(frame_ns_mod / ns_per_y) * ns_per_y)) / frame_time) * rect_w;
-
 				uint32_t movev = (uint32_t)move_color;
-				for (int ry =0; ry < rect_h; ++ry) {
-					int y = top + ry;
-					if (y <0 || y >= yres) continue;
-					uint32_t *rowPtr = pixels + (size_t)y * (size_t)xres;
-					for (int rx =0; rx < rect_w; ++rx) {
-						int x = left + rx;
-						if (x <0 || x >= xres) continue;
-						rowPtr[x] = movev;
+
+				// Prepare buffers once
+				if (!move_buffers_prepared) {
+					black_pixels.assign(total_pixels,
+							    blackv);
+					rect_pixels.assign(move_rect_w *
+								   move_rect_h,
+							   movev);
+					move_buffers_prepared = true;
+				}
+
+				// Restore previous rectangle area from black background
+				if (prev_left >= 0 && prev_top >= 0) {
+					for (int ry = 0; ry < move_rect_h;
+					     ++ry) {
+						int y = prev_top + ry;
+						if (y < 0 || y >= yres)
+							continue;
+						size_t dstIndex =
+							(size_t)y * xres +
+							(size_t)prev_left;
+						size_t srcIndex =
+							(size_t)y * xres +
+							(size_t)prev_left;
+						if (prev_left >= 0 &&
+						    prev_left + move_rect_w <=
+							    (int)xres) {
+							memcpy(&pixels[dstIndex],
+							       &black_pixels
+								       [srcIndex],
+							       move_rect_w *
+								       sizeof(uint32_t));
+						} else {
+							// partial restore
+							for (int rx = 0;
+							     rx < move_rect_w;
+							     ++rx) {
+								int x = prev_left +
+									rx;
+								if (x < 0 ||
+								    x >= xres)
+									continue;
+								pixels[dstIndex +
+								       rx] = black_pixels
+									[srcIndex +
+									 rx];
+							}
+						}
 					}
 				}
+
+				const int rect_w = move_rect_w;
+				const int rect_h = move_rect_h;
+
+				// compute a deterministic frame index from the (rounded) timestamp
+				const uint64_t frames_per_y =
+					(uint64_t)xres /
+					rect_w; // horizontal count
+				const uint64_t frames_per_x =
+					(uint64_t)yres /
+					rect_h; // vertical count
+				const uint64_t frames_per_image =
+					frames_per_x * frames_per_y;
+
+				// wrap into single image sweep
+				uint64_t frame_idx_mod =
+					frame_index % frames_per_image;
+
+				// derive grid coordinates
+				uint64_t y_index =
+					frame_idx_mod /
+					frames_per_y; // vertical cell index
+				uint64_t x_index =
+					frame_idx_mod %
+					frames_per_y; // horizontal cell index
+
+				frame_index++;
+
+				int top = static_cast<int>(y_index * rect_h);
+				int left = static_cast<int>(x_index * rect_w);
+
+				// Clip and blit rect_pixels into frame
+				for (int ry = 0; ry < rect_h; ++ry) {
+					int y = top + ry;
+					if (y < 0 || y >= yres)
+						continue;
+					size_t dstIndex =
+						(size_t)y * xres + (size_t)left;
+					size_t srcIndex = (size_t)ry * rect_w;
+					if (left >= 0 &&
+					    left + rect_w <= (int)xres) {
+						memcpy(&pixels[dstIndex],
+						       &rect_pixels[srcIndex],
+						       rect_w *
+							       sizeof(uint32_t));
+					} else {
+						for (int rx = 0; rx < rect_w;
+						     ++rx) {
+							int x = left + rx;
+							if (x < 0 || x >= xres)
+								continue;
+							pixels[dstIndex +
+							       rx] = rect_pixels
+								[srcIndex + rx];
+						}
+					}
+				}
+
+				// Store current rect as previous for next frame
+				prev_left = left;
+				prev_top = top;
 			} else {
 				std::fill_n((uint32_t *)NDI_video_frame.p_data,
-					(size_t)xres * (size_t)yres, v);
+					    (size_t)xres * (size_t)yres, v);
 			}
 		}
-		
+		// Stop timing and measure elapsed time for the video fill section
+		if (PROFILE) perf.end();
+
+		if (PROFILE) perfv.start();
 		NDI_video_frame.timestamp = frame_ns / 100;
 		NDI_video_frame.timecode = NDIlib_send_timecode_synthesize;
 		if (setcode)
@@ -932,10 +1102,19 @@ int main(int argc, char *argv[])
 				(nanoseconds + (idx * frame_time)) / 100;
 
 		// Check if start of white frame and log the frame time, audio time and diff
-		obs_sync_debug_log_video_time(message, NDI_video_frame.timestamp, NDI_video_frame.p_data);
+		if (output_type == OutputType::BW)
+			obs_sync_debug_log_video_time(message,
+						      NDI_video_frame.timestamp,
+						      NDI_video_frame.p_data);
+
 		NDIlib_send_send_video_v2(pNDI_send, &NDI_video_frame);
+		if (PROFILE) perfv.end();
 
 		last_white = white;
+		if (PROFILE) perfl.end();
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(
+			10)); // Sleep a bit to avoid busy loop and allow for graceful exit on Ctrl+C
 	}
 
 	if (timer_thread_started) {
