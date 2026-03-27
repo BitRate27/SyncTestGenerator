@@ -850,8 +850,7 @@ int main(int argc, char *argv[])
 		//	     100000; // adjust frame time to milliseconds
 		nanoseconds = os_gettime_ns();
 
-		uint64_t frame_ns = static_cast<uint64_t>(nanoseconds);
-		
+		uint64_t frame_ns = frame_index * frame_time;
 
 		if (output_type == OutputType::BW) {
 			white = (frame_ns >= start_second) &&
