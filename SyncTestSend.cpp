@@ -805,7 +805,6 @@ int main(int argc, char *argv[])
 	uint64_t start_second = ((start_time / ns_per_sec) + 1) * ns_per_sec;
 	uint64_t end_second = start_second + ns_per_sec;
 	last_white = true;
-	start_time = start_second;
 
 	if (output_type == OutputType::BW) {
 		std::cout << "      White starts at: " << start_second << " ns"
