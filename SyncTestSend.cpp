@@ -244,7 +244,7 @@ int main()
 using json = nlohmann::json;
 #define M_PI 3.14159265358f
 
-#define PROFILE true
+#define PROFILE false
 #ifdef _WIN32
 #ifdef _WIN64
 #pragma comment(lib, "Processing.NDI.Lib.x64.lib")
@@ -836,6 +836,7 @@ int main(int argc, char *argv[])
 	uint64_t send_ts = os_gettime_ns();
 
 	uint64_t frame_index = start_time / frame_time;
+	auto prev_time = std::chrono::high_resolution_clock::now();
 
 	// We will send video frames until exit
 	for (int idx = 0; !exit_loop; idx++) {
@@ -1093,8 +1094,8 @@ int main(int argc, char *argv[])
 		if (PROFILE) perf.end();
 
 		if (PROFILE) perfv.start();
-		NDI_video_frame.timestamp = frame_ns / 100;
-		NDI_video_frame.timecode = NDIlib_send_timecode_synthesize;
+	//	NDI_video_frame.timestamp = frame_ns / 100;
+	//	NDI_video_frame.timecode = NDIlib_send_timecode_synthesize;
 		if (setcode)
 			NDI_video_frame.timecode =
 				(nanoseconds + (idx * frame_time)) / 100;
@@ -1104,8 +1105,26 @@ int main(int argc, char *argv[])
 			obs_sync_debug_log_video_time(message,
 						      NDI_video_frame.timestamp,
 						      NDI_video_frame.p_data);
+		// We now submit the frame.
+		NDIlib_send_send_video_async_v2(pNDI_send, &NDI_video_frame);
 
-		NDIlib_send_send_video_v2(pNDI_send, &NDI_video_frame);
+		// Every 1000 frames we check how long it has taken
+		if (idx && ((idx % 1000) == 0)) {
+			// Get the time
+			const auto this_time =
+				std::chrono::high_resolution_clock::now();
+
+			// Display the frames per second
+			printf("%dx%d video encoded at %1.1f fps.\n", xres, yres,
+			       1000.0f / std::chrono::duration_cast<
+						 std::chrono::duration<float>>(
+						 this_time - prev_time)
+						 .count());
+
+			// Cycle the timers
+			prev_time = this_time;
+		}
+		//NDIlib_send_send_video_v2(pNDI_send, &NDI_video_frame);
 		if (PROFILE) perfv.end();
 
 		last_white = white;

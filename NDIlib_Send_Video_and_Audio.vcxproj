@@ -124,7 +124,7 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(SolutionDir)Lib\$(PlatformShortName)\</AdditionalLibraryDirectories>
-      <AdditionalDependencies>$(NDI_SDK_DIR)\Lib\$(LibrariesArchitecture)\Processing.NDI.Lib.$(LibrariesArchitecture).lib;C:\Users\bgill\source\repos\SyncTestGenerator\x64\Debug\NTPClient.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>..\Lib\$(LibrariesArchitecture)\Processing.NDI.Lib.$(LibrariesArchitecture).lib;C:\Users\bgill\source\repos\SyncTestGenerator\x64\Debug\NTPClient.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PreBuildEvent>
       <Command>
