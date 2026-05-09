@@ -1,7 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <LocalDebuggerCommandArguments>-output=Move -config=3840x2160x60BGR3.cfg -color=red</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>-output=BW -config=UYVY.cfg -log="C:\Users\bgill\AppData\Roaming\obs-studio\logs\\"</LocalDebuggerCommandArguments>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
     <LocalDebuggerWorkingDirectory>$(ProjectDir)</LocalDebuggerWorkingDirectory>
   </PropertyGroup>

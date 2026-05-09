@@ -1,9 +1,12 @@
 #pragma once
 // Force static library usage of NTPClient and link the library if available
+
+
 #define NTPCLIENT_STATIC
 #pragma comment(lib, "NTPClient.lib")
 
 #include <winsock2.h>
+#include <windows.h>
 #include <Processing.NDI.Lib.h>
 #include <algorithm>
 #include <atomic>
@@ -24,7 +27,7 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
-#include <windows.h>
+
 #include <ws2tcpip.h>
 
 #pragma comment(lib, "ws2_32.lib")
@@ -256,7 +259,50 @@ bool audio_on = false;
 int64_t audio_on_time;
 bool white_on = false;
 int64_t white_on_time;
+static FILE *log_fp = nullptr;
+static void close_log()
+{
+	if (log_fp) {
+		fclose(log_fp);
+		log_fp = nullptr;
+	}
+}
+static void log_file(const char *fmt, ...)
+{
+	if (!log_fp)
+		return;
 
+	// Get current local time with milliseconds
+	auto now = std::chrono::system_clock::now();
+	auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+			  now.time_since_epoch()) %
+		  1000;
+	time_t tnow = std::chrono::system_clock::to_time_t(now);
+	struct tm local_tm;
+#if defined(_WIN32)
+	localtime_s(&local_tm, &tnow);
+#else
+	localtime_r(&tnow, &local_tm);
+#endif
+
+	char timebuf[32];
+	snprintf(timebuf, sizeof(timebuf),
+		 "%02d:%02d:%02d.%03d: ", local_tm.tm_hour, local_tm.tm_min,
+		 local_tm.tm_sec, static_cast<int>(ms.count()));
+
+	// Write timestamp prefix
+	fputs(timebuf, log_fp);
+
+	// Write the formatted message
+	va_list ap;
+	va_start(ap, fmt);
+	vfprintf(log_fp, fmt, ap);
+	va_end(ap);
+
+	// Newline and flush
+	fprintf(log_fp, "\n");
+	fflush(log_fp);
+}
 int64_t obs_sync_white_time(int64_t time, uint8_t *p_data)
 {
 	uint8_t pixel0 = p_data[0];
@@ -383,7 +429,8 @@ void get_colors(int format, char *mcolor, uint32_t &white, uint32_t &black,
 		}
 	}
 }
-
+static uint64_t last_audio_sync_time = 0;
+static uint64_t last_video_sync_time = 0;
 void obs_sync_debug_log_video_time(const char *message, uint64_t timestamp,
 				   uint8_t *data)
 {
@@ -395,11 +442,12 @@ void obs_sync_debug_log_video_time(const char *message, uint64_t timestamp,
 		white_on_time = white_time;
 
 		int64_t diff = white_on_time - audio_on_time;
-
-		printf("AT %lld WT %lld: %17lld %s\n",
-		       audio_on_time, white_on_time,
-		       diff, message);
-
+		if ((abs(diff) / 1000000) < 80) {
+			log_file("%s Video AT: %10lld WT: %10lld Delta: %5lld",
+				 message, audio_on_time / 1000000,
+				 white_on_time / 1000000, diff / 1000000);
+		}
+		last_video_sync_time = white_on_time;
 	} else if (white_on && (white_time == 0)) {
 		white_on = false;
 	}
@@ -414,6 +462,13 @@ void obs_sync_debug_log_audio_time(const char *message, uint64_t timestamp,
 	if (!audio_on && (audio_time > 0)) {
 		audio_on = true; // set audio on
 		audio_on_time = audio_time;
+
+		int64_t diff = white_on_time - audio_on_time;
+		if ((abs(diff) / 1000000) < 80)
+			log_file("%s Audio AT: %10lld WT: %10lld Delta: %5lld",
+				 message, audio_on_time / 1000000,
+				 white_on_time / 1000000, diff / 1000000);
+		last_audio_sync_time = audio_on_time;
 	} else if (audio_on && (audio_time == 0)) {
 		audio_on = false;
 	}
@@ -545,7 +600,7 @@ int main(int argc, char *argv[])
 
 	std::thread timer_thread = {};
 	bool timer_thread_started = false;
-
+	std::string log_path;
 	OutputType output_type = OutputType::BW;
 	bool setcode = false;
 	std::string config_file;
@@ -584,6 +639,12 @@ int main(int argc, char *argv[])
 			use_ntp = true;
 		} else if (strncmp(argv[i], "-config=", 8) == 0) {
 			config_file = argv[i] + 8;
+		} else if (strncmp(argv[i], "-log=", 5) == 0) {
+			std::string v = argv[i] + 5;
+			if (v.size() >= 2 && v.front() == '"' &&
+			    v.back() == '"')
+				v = v.substr(1, v.size() - 2);
+			log_path = v;
 		}
 	}
 
@@ -657,6 +718,74 @@ int main(int argc, char *argv[])
 		}
 	}
 	std::cout << "Config name: " << config_name.c_str() << std::endl;
+	std::string ndi_name;
+	
+	switch (output_type) {
+	case OutputType::Black:
+		ndi_name = "Sync Test Black";
+		break;
+	case OutputType::White: {
+		char name2[256];
+		sprintf_s<256>(name2, "Sync Test White (%s)",
+			       config_name.c_str());
+		ndi_name = name2;
+		break;
+	}
+	case OutputType::Move: {
+		char name2[256];
+		sprintf_s<256>(name2, "Move (%s)", config_name.c_str());
+		ndi_name = name2;
+		break;
+	}
+	case OutputType::BW:
+	default:
+		char name[256];
+		sprintf_s<256>(name, "%s", config_name.c_str());
+		ndi_name = name;
+		break;
+	}
+
+	// Open log file if requested
+	if (!log_path.empty()) {
+		// Append timestamped filename Sender-<ndi_name>-<datetime>.log to the provided path
+		{
+			// Create timestamp in local time formatted as YYYY-MM-DD HH-MM-SS
+			auto now = std::chrono::system_clock::now();
+			time_t tnow = std::chrono::system_clock::to_time_t(now);
+			struct tm local_tm;
+#if defined(_WIN32)
+			localtime_s(&local_tm, &tnow);
+#else
+			localtime_r(&tnow, &local_tm);
+#endif
+			char timestr[64];
+			strftime(timestr, sizeof(timestr), "%Y-%m-%d %H-%M-%S",
+				 &local_tm);
+			std::string filename =
+				std::string("Sender-") +
+				std::string(ndi_name) +
+				std::string("-") + timestr + ".log";
+
+			// Ensure log_path ends with a path separator before appending filename
+			if (!log_path.empty()) {
+				char last = log_path.back();
+				if (last != '\\' && last != '/')
+					log_path.push_back('\\');
+			}
+			log_path += filename;
+		}
+
+		fopen_s(&log_fp,log_path.c_str(), "a");
+		if (!log_fp) {
+			fprintf(stderr, "Failed to open log file: %s\n",
+				log_path.c_str());
+		} else {
+			//setvbuf(log_fp, nullptr, _IOLBF,0);
+			atexit(close_log);
+			log_file("SyncTestSend started. log=%s",
+				 log_path.c_str());
+		}
+	}
 
 	const int n_white = 30;
 	const int n_black = 60;
@@ -750,33 +879,17 @@ int main(int argc, char *argv[])
 		std::cout << " " << argv[i];
 	}
 	std::cout << std::endl;
+
+	log_file("Started SyncTestSend with parameters: xres=%d, yres=%d, frame_rate=%d/%d, format=%d, audio_no_samples=%d",
+		 xres, yres, frame_rate_N, frame_rate_D, format,
+		audio_no_samples);
+	log_file("NDI Name: %s", ndi_name.c_str());
+
 	NDIlib_send_create_t NDI_send_create_desc{};
-	switch (output_type) {
-	case OutputType::Black:
-		NDI_send_create_desc.p_ndi_name = "Sync Test Black";
-		break;
-	case OutputType::White: {
-		char name2[256];
-		sprintf_s<256>(name2, "Sync Test White (%s)",
-			       config_name.c_str());
-		NDI_send_create_desc.p_ndi_name = name2;
-		break;
-	}
-	case OutputType::Move: {
-		char name2[256];
-		sprintf_s<256>(name2, "Move (%s)", config_name.c_str());
-		NDI_send_create_desc.p_ndi_name = name2;
-		break;
-	}
-	case OutputType::BW:
-	default:
-		char name[256];
-		sprintf_s<256>(name, "Sync Test (%s)", config_name.c_str());
-		NDI_send_create_desc.p_ndi_name = name;
-		break;
-	}
+
 	NDI_send_create_desc.clock_audio = false;
 	NDI_send_create_desc.clock_video = true;
+	NDI_send_create_desc.p_ndi_name = ndi_name.c_str();
 
 	char message[256];
 	sprintf_s<256>(message, "NDI <- SyncTestSend [%s]",
@@ -837,9 +950,13 @@ int main(int argc, char *argv[])
 
 	uint64_t frame_index = start_time / frame_time;
 	auto prev_time = std::chrono::high_resolution_clock::now();
+	int idx = 0;
 
 	// We will send video frames until exit
-	for (int idx = 0; !exit_loop; idx++) {
+	for (const auto start = std::chrono::high_resolution_clock::now();
+	     std::chrono::high_resolution_clock::now() - start <
+	     std::chrono::seconds(30);) {
+
 		if (PROFILE) perfl.start();
 
 		// Determine if the frame should be black or white based on the output type
@@ -853,8 +970,8 @@ int main(int argc, char *argv[])
 		uint64_t frame_ns = frame_index * frame_time;
 
 		if (output_type == OutputType::BW) {
-			white = (frame_ns >= start_second) &&
-				(frame_ns <= end_second);
+			white = (nanoseconds >= start_second) &&
+				(nanoseconds <= end_second);
 			/* if (white)
 				std::cout << "white: idx=" << idx
 					  << ", frame_ns=" << frame_ns << std::endl;
@@ -872,14 +989,15 @@ int main(int argc, char *argv[])
 		NDI_audio_frame.no_samples = audio_no_samples;
 
 		if (!last_sound && sound) {
+			std::cout << "Sound on\n";
 			sine_sample = 0;
 		}
 
 		if (last_white && !white) {
 			start_second += (ns_per_sec * 4);
 			end_second = start_second + ns_per_sec;
-			//std::cout << "New white" << start_second << " ns"
-			//	  << std::endl;
+			std::cout << "New white" << start_second << " ns"
+				  << std::endl;
 		}
 
 		if (PROFILE) perfa.start();
@@ -1094,8 +1212,8 @@ int main(int argc, char *argv[])
 		if (PROFILE) perf.end();
 
 		if (PROFILE) perfv.start();
-	//	NDI_video_frame.timestamp = frame_ns / 100;
-	//	NDI_video_frame.timecode = NDIlib_send_timecode_synthesize;
+		NDI_video_frame.timestamp = frame_ns / 100;
+		NDI_video_frame.timecode = NDIlib_send_timecode_synthesize;
 		if (setcode)
 			NDI_video_frame.timecode =
 				(nanoseconds + (idx * frame_time)) / 100;
@@ -1132,6 +1250,7 @@ int main(int argc, char *argv[])
 
 		std::this_thread::sleep_for(std::chrono::milliseconds(
 			10)); // Sleep a bit to avoid busy loop and allow for graceful exit on Ctrl+C
+		idx++;
 	}
 
 	if (timer_thread_started) {

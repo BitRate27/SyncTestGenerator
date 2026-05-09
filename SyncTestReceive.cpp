@@ -100,12 +100,11 @@ void obs_sync_debug_log_video_time(const char* message, uint64_t timestamp, uint
 
 		int64_t diff = white_on_time - audio_on_time;
 		if ((abs(diff) / 1000000) < 80) {
-			log_file("Video AT: %10lld WT: %10lld Delta: %5lld, Last: %lld %s\n",
+			log_file("%s Video AT: %10lld WT: %10lld Delta: %5lld",
+			       message,
 			       audio_on_time / 1000000, white_on_time / 1000000,
-			       diff / 1000000,
-			       (white_on_time - last_video_sync_time) / 1000000,
-			       message);
-		}			
+			       diff / 1000000);
+		}
 		last_video_sync_time = white_on_time;
 	}
 	else if (white_on && (white_time == 0)) {
@@ -124,10 +123,10 @@ void obs_sync_debug_log_audio_time(const char* message, uint64_t timestamp, floa
 
 		int64_t diff = white_on_time - audio_on_time;
 		if ((abs(diff)/1000000) < 80)
-			log_file("Audio AT: %10lld WT: %10lld Delta: %5lld, Last: %lld %s\n",
+			log_file("%s Audio AT: %10lld WT: %10lld Delta: %5lld",
+				message,
 				audio_on_time / 1000000, white_on_time / 1000000,
-				diff / 1000000,
-				(audio_on_time - last_audio_sync_time) / 1000000, message);
+				diff / 1000000);
 		last_audio_sync_time = audio_on_time;
 	}
 	else if (audio_on && (audio_time == 0)) {
@@ -178,7 +177,9 @@ int main(int argc, char* argv[])
 		#endif
 			char timestr[64];
 			strftime(timestr, sizeof(timestr), "%Y-%m-%d %H-%M-%S", &local_tm);
-			std::string filename = std::string("Receiver") + timestr + ".log";
+			std::string filename = std::string("Receiver-") +
+				std::string(desired_source_name) + std::string("-") + timestr +
+				".log";
 
 			// Ensure log_path ends with a path separator before appending filename
 			if (!log_path.empty()) {
@@ -284,7 +285,7 @@ int main(int argc, char* argv[])
 	// Run for one minute
 	using namespace std::chrono;
 	steady_clock::time_point last_report_time = steady_clock::now();
-	for (const auto start = high_resolution_clock::now(); high_resolution_clock::now() - start < minutes(5);) {
+	for (const auto start = high_resolution_clock::now(); high_resolution_clock::now() - start < seconds(30);) {
 	
 		// Get audio samples
 		NDIlib_audio_frame_v2_t audio_frame;
@@ -343,20 +344,6 @@ int main(int argc, char* argv[])
 		// This is our clock. We are going to run at 30Hz and the frame-sync is smart enough to
 		// best adapt the video and audio to match that.
 		std::this_thread::sleep_for(milliseconds(10));
-
-		// Periodic status report once per second
-		{
-			auto now = steady_clock::now();
-			if (now - last_report_time >= seconds(1)) {
-				// Safely print/ log current frame info
-				log_file("%s: video=%dx%d timecode=%lld, audio=no_samples=%d timecode=%lld",
-					message,
-					video_frame.xres, video_frame.yres,
-					(long long)video_frame.timecode,
-					audio_frame.no_samples, (long long)audio_frame.timecode);
-				last_report_time = now;
-			}
-		}
 	}
 
 	// Free the frame-sync
