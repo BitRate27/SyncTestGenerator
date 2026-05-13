@@ -15,9 +15,13 @@
 #endif // _WIN32
 
 bool audio_on = false;
-int64_t audio_on_time;
+int64_t audio_on_time = -1;
+int64_t audio_off_time = -1;
+
 bool white_on = false;
-int64_t white_on_time;
+int64_t white_on_time = -1;
+int64_t white_off_time = -1;
+
 static FILE *log_fp = nullptr;
 static void close_log()
 {
@@ -67,18 +71,17 @@ int64_t obs_sync_white_time(int64_t time, uint8_t* p_data)
 	bool white = (((pixel0 == 128) && (pixel1 == 235)) || ((pixel0 == 255) && (pixel1 == 255)));
 	return white ? time : 0;
 }
-int64_t obs_sync_audio_time(int64_t time, float* p_data, int nsamples, int samplerate)
+
+int64_t obs_sync_audio_on_time(int64_t time, float* p_data, int nsamples, int samplerate)
 {
-	int64_t return_time = 0;
-	int sample = 0;
+	int64_t return_time = -1;
+	int64_t sample = 0;
+
 	while (sample < nsamples) {
 		float sample_amp = p_data[sample];
-		if (sample_amp != 0.0f) {
+		if ((sample_amp >= 0.0009f) || (sample_amp <= -0.0009f)) {
 			int64_t ns_per_sample = 1000000000 / samplerate;
-			return_time = time + sample * ns_per_sample;
-			float sample_amp_prev = 0.0f;
-			if (sample > 0)
-				sample_amp_prev = p_data[sample - 1];
+			return_time = time + (sample * ns_per_sample);			
 			return return_time;
 		}
 		sample++;
@@ -86,51 +89,79 @@ int64_t obs_sync_audio_time(int64_t time, float* p_data, int nsamples, int sampl
 	return return_time;
 }
 
-static uint64_t last_audio_sync_time = 0;
-static uint64_t last_video_sync_time = 0;
-
-void obs_sync_debug_log_video_time(const char* message, uint64_t timestamp, uint8_t* data)
+int64_t obs_sync_audio_off_time(int64_t time, float *p_data, int nsamples,
+			       int samplerate)
 {
+	int64_t return_time = -1;
+	int64_t sample = 0;
 
-	// If white frame is going from off to on, log the frame time, audio time and diff
+	while (sample < nsamples) {
+		float sample_amp = p_data[sample];
+		if ((sample_amp < 0.0009f) && (sample_amp > -0.0009f)) {
+			int64_t ns_per_sample = 1000000000 / samplerate;
+			return_time = time + (sample * ns_per_sample);
+			return return_time;
+		}
+		sample++;
+	}
+	return return_time;
+}
+const int64_t max_offset = 2000000000LL; // 2 seconds
+
+void obs_sync_debug_video_time(uint64_t timestamp,
+				   uint8_t *data)
+{
 	int64_t white_time = obs_sync_white_time(timestamp, data);
 	if (!white_on && (white_time > 0)) {
 		white_on = true;
 		white_on_time = white_time;
-
-		int64_t diff = white_on_time - audio_on_time;
-		if ((abs(diff) / 1000000) < 80) {
-			log_file("%s Video AT: %10lld WT: %10lld Delta: %5lld",
-			       message,
-			       audio_on_time / 1000000, white_on_time / 1000000,
-			       diff / 1000000);
-		}
-		last_video_sync_time = white_on_time;
-	}
-	else if (white_on && (white_time == 0)) {
+		//log_file("White on at %lld", white_on_time);
+	} else if (white_on && (white_time == 0)) {
+		white_off_time = timestamp;
 		white_on = false;
+		//log_file("White off at %lld", white_off_time);
 	}
 }
-void obs_sync_debug_log_audio_time(const char* message, uint64_t timestamp, float* data, int no_samples,
-	int sample_rate)
+void obs_sync_debug_audio_time(uint64_t timestamp,
+				   float *data, int no_samples, int sample_rate)
 {
-
-	// If audio on, log the frame time
-	int64_t audio_time = obs_sync_audio_time(timestamp, data, no_samples, sample_rate);
+	int64_t audio_time =
+		obs_sync_audio_on_time(timestamp, data, no_samples, sample_rate);
 	if (!audio_on && (audio_time > 0)) {
-		audio_on = true; // set audio on
+		audio_on = true; 
 		audio_on_time = audio_time;
-
-		int64_t diff = white_on_time - audio_on_time;
-		if ((abs(diff)/1000000) < 80)
-			log_file("%s Audio AT: %10lld WT: %10lld Delta: %5lld",
-				message,
-				audio_on_time / 1000000, white_on_time / 1000000,
-				diff / 1000000);
-		last_audio_sync_time = audio_on_time;
-	}
-	else if (audio_on && (audio_time == 0)) {
+		//log_file("Audio on at %lld", audio_on_time);
+	} else if (audio_on && (audio_time == -1)) {
+		audio_off_time = timestamp;
 		audio_on = false;
+		//log_file("Audio off at %lld", audio_off_time);
+	}
+}
+void obs_sync_debug_log(const char *message, int64_t timestamp)
+{
+	if (timestamp > std::max<int64_t>(audio_on_time, white_on_time) + max_offset) {
+		if (white_on_time > 0 && audio_on_time > 0) {
+			int64_t diff = white_on_time - audio_on_time;
+			log_file(
+				"%s Sync A/V   AT: %15lld WT: %15lld Delta: %5lld",
+				message, audio_on_time / 1000000,
+				white_on_time / 1000000, diff / 1000000);
+			audio_on_time = 0;
+			white_on_time = 0;
+		}
+		if (white_on_time > 0) {
+			log_file(
+				"%s Sync Video AT: --------------- WT: %15lld Delta: -----",
+				message, white_on_time / 1000000);
+			white_on_time = 0;
+		}
+
+		if (audio_on_time > 0) {
+			log_file(
+				"%s Sync Audio AT: %15lld WT: --------------- Delta: -----",
+				message, audio_on_time / 1000000);
+			audio_on_time = 0;
+		}
 	}
 }
 enum class SyncType { Code, Stamp };
@@ -143,7 +174,7 @@ int main(int argc, char* argv[])
 	const char* desired_source_name = "";
 	SyncType sync_type = SyncType::Code;
 	std::string log_path;
-
+	int duration = 30;
 	// Parse command line arguments
 	for (int i =1; i < argc; ++i) {
 		if (strncmp(argv[i], "-source=",8) ==0) {
@@ -155,6 +186,8 @@ int main(int argc, char* argv[])
 			if (v.size() >=2 && v.front() == '"' && v.back() == '"')
 				v = v.substr(1, v.size() -2);
 			log_path = v;
+		} else if (strncmp(argv[i], "-duration=", 10) == 0) {
+			duration = std::atoi(argv[i] + 10);
 		}
 	}
 
@@ -264,7 +297,13 @@ int main(int argc, char* argv[])
 	sprintf_s<256>(message, "NDI -> SyncTestReceive [%s]", desired_source_name);
 
 	NDIlib_recv_create_v3_t recv_desc;
-	recv_desc.color_format = NDIlib_recv_color_format_e_UYVY_BGRA;
+
+	recv_desc.bandwidth = NDIlib_recv_bandwidth_highest;
+	recv_desc.p_ndi_recv_name = nullptr;
+	recv_desc.source_to_connect_to.p_ndi_name = p_sources[source_index].p_ndi_name;
+	recv_desc.color_format = NDIlib_recv_color_format_UYVY_BGRA;
+	recv_desc.allow_video_fields = true;
+	recv_desc.p_ndi_recv_name = message;
 
 	// We now have at least one source, so we create a receiver to look at it.
 	NDIlib_recv_instance_t pNDI_recv = NDIlib_recv_create_v3(&recv_desc);
@@ -274,80 +313,55 @@ int main(int argc, char* argv[])
 	// Connect to our sources
 	NDIlib_recv_connect(pNDI_recv, p_sources + source_index);
 
-	// We are now going to use a frame-synchronizer to ensure that the audio is dynamically
-	// resampled and time-based con
-	NDIlib_framesync_instance_t pNDI_framesync = NDIlib_framesync_create(pNDI_recv);
-
 	// Destroy the NDI finder. We needed to have access to the pointers to p_sources[0]
 	NDIlib_find_destroy(pNDI_find);
-
+	NDIlib_audio_frame_v3_t audio_frame = {0};
+	NDIlib_video_frame_v2_t video_frame = {0};
 	uint64_t last_timestamp = 0LL;
 	// Run for one minute
 	using namespace std::chrono;
 	steady_clock::time_point last_report_time = steady_clock::now();
-	for (const auto start = high_resolution_clock::now(); high_resolution_clock::now() - start < seconds(30);) {
-	
-		// Get audio samples
-		NDIlib_audio_frame_v2_t audio_frame;
-		NDIlib_framesync_capture_audio(pNDI_framesync, &audio_frame,
-				48000,4,1600);
+	for (const auto start = high_resolution_clock::now(); high_resolution_clock::now() - start < seconds(duration);) {
+		NDIlib_frame_type_e frame_received = NDIlib_recv_capture_v3(
+			pNDI_recv, &video_frame, &audio_frame, nullptr, 100);
 
-		// Using a frame-sync we can always get data which is the magic and it will adapt
-		// to the frame-rate that it is being called with.
-		NDIlib_video_frame_v2_t video_frame;
-		NDIlib_framesync_capture_video(pNDI_framesync, &video_frame);
-
-		// Display video here. The reason that the frame-sync does not return a frame until it has
-		// received the frame (e.g. it could return a black 1920x1080 image p) is that you are likely to
-		// want to default to some video standard (NTSC or PAL) and there would be no way to know what
-		// your default image should be from an API level.
-		if (video_frame.p_data) {
-
-			int frame_time = 1000000000 / (video_frame.frame_rate_N/video_frame.frame_rate_D);
-			if ((sync_type == SyncType::Code
-					    ? video_frame.timecode * 100
-					    : video_frame.timestamp) >
-				last_timestamp + frame_time) {
-
-				obs_sync_debug_log_video_time(
-					message,
+		if (frame_received == NDIlib_frame_type_audio) {
+			if (audio_frame.p_data) {
+				float *audio_data = reinterpret_cast<float *>(
+					audio_frame.p_data);
+				int64_t timestamp =
 					sync_type == SyncType::Code
-						? video_frame.timecode *
-								100
-						: video_frame.timestamp,
-					video_frame.p_data);
+						? audio_frame.timecode * 100
+						: audio_frame.timestamp * 100;
 
-				obs_sync_debug_log_audio_time(
-					message,
-					sync_type == SyncType::Code
-						? audio_frame.timecode *
-								100
-						: audio_frame.timestamp,
-					audio_frame.p_data,
+				obs_sync_debug_audio_time(
+					timestamp, audio_data,
 					audio_frame.no_samples,
 					audio_frame.sample_rate);
 
-				last_timestamp =
-					sync_type == SyncType::Code
-						? video_frame.timecode *
-								100
-						: video_frame.timestamp;
-
+				obs_sync_debug_log(message, timestamp);
 			}
+			NDIlib_recv_free_audio_v3(pNDI_recv, &audio_frame);
 		}
+		if (frame_received == NDIlib_frame_type_video) {
+			if (video_frame.p_data) {
+				int64_t timestamp =
+					sync_type == SyncType::Code
+						? video_frame.timecode * 100
+						: video_frame.timestamp * 100;
 
-		// Release the video. You could keep the frame if you want and release it later.
-		NDIlib_framesync_free_audio(pNDI_framesync, &audio_frame);
-		// Release the video. You could keep the frame if you want and release it later.
-		NDIlib_framesync_free_video(pNDI_framesync, &video_frame);
+				obs_sync_debug_video_time(timestamp,
+							  video_frame.p_data);
+
+				obs_sync_debug_log(message, timestamp);
+			}
+			NDIlib_recv_free_video_v2(pNDI_recv, &video_frame);
+		}
 
 		// This is our clock. We are going to run at 30Hz and the frame-sync is smart enough to
 		// best adapt the video and audio to match that.
 		std::this_thread::sleep_for(milliseconds(10));
 	}
-
-	// Free the frame-sync
-	NDIlib_framesync_destroy(pNDI_framesync);
 
 	// Destroy the receiver
 	NDIlib_recv_destroy(pNDI_recv);
