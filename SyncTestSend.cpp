@@ -102,9 +102,10 @@ int64_t obs_sync_audio_time(int64_t time, float *p_data, int nsamples,
 {
 	int64_t return_time = -1;
 	int sample = 0;
+	float last_amp = 0.0f;
 	while (sample < nsamples) {
 		float sample_amp = p_data[sample];
-		if ((sample_amp >= 0.0009f) || (sample_amp <= -0.0009f)) {
+		if (sample_amp != last_amp) {
 			int64_t ns_per_sample = 1000000000 / samplerate;
 			return_time = time + sample * ns_per_sample;
 			return return_time;
