@@ -4,6 +4,7 @@
 #include <thread>
 #include <string>
 #include <cstdarg>
+using namespace std::chrono;
 
 #ifdef _WIN32
 #ifdef _WIN64
@@ -156,7 +157,7 @@ void obs_sync_debug_log(const char *message, int64_t timestamp)
 {
 	if (timestamp >
 	    std::max<int64_t>(audio_on_time, white_on_time) + max_offset) {
-		if (white_on_time > 0 && audio_on_time > 0) {
+		if (white_on_time > 0 && audio_on_time > 0 && audio_sync_count > 0  && video_sync_count > 0) {
 			int64_t diff = white_on_time - audio_on_time;
 			log_file(
 				"%s Sync A/V   AT: %15lld AW: %5lld AC: %3d VT: %15lld VW: %5lld VC: %3d Delta: %5lld",
@@ -176,7 +177,7 @@ void obs_sync_debug_log(const char *message, int64_t timestamp)
 			white_on_time = 0;
 			white_off_time = 0;
 		}
-		if (white_on_time > 0) {
+		if (white_on_time > 0 && video_sync_count > 0) {
 			log_file(
 				"%s Sync Video AT: --------------- AW: ----- AC: --- VT: %15lld VW: %5lld VC: %3d Delta: -----",
 				message, white_on_time / 1000000,
@@ -189,7 +190,7 @@ void obs_sync_debug_log(const char *message, int64_t timestamp)
 			white_off_time = 0;
 		}
 
-		if (audio_on_time > 0) {
+		if (audio_on_time > 0 && audio_sync_count > 0) {
 			log_file(
 				"%s Sync Audio AT: %15lld AW: %5lld AC: %3d VT: --------------- VW: ----- VC: --- Delta: -----",
 				message, audio_on_time / 1000000,
@@ -217,7 +218,7 @@ int main(int argc, char *argv[])
 	for (int i = 1; i < argc; ++i) {
 		if (strncmp(argv[i], "-source=", 8) == 0) {
 			desired_source_name = argv[i] + 8;
-		} else if (strcmp(argv[i], "-stamp") == 0) {
+		} else if (strncmp(argv[i], "-stamp", 6) == 0) {
 			sync_type = SyncType::Stamp;
 		} else if (strncmp(argv[i], "-log=", 5) == 0) {
 			std::string v = argv[i] + 5;
@@ -230,6 +231,10 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	if (strcmp(desired_source_name, "") == 0) {
+		printf("No source name provided. Usage: SyncTestReceive -source=\"<name in () listed above>\"\n");
+		return 0;
+	}
 	// Not required, but "correct" (see the SDK documentation).
 	if (!NDIlib_initialize())
 		return 0;
@@ -285,38 +290,20 @@ int main(int argc, char *argv[])
 	uint32_t no_sources = 0;
 	uint32_t last_no_sources = 0;
 	const NDIlib_source_t *p_sources = NULL;
-	do {
+	int source_index = -1;
+	const auto start = high_resolution_clock::now();
+	
+	do
+	{
 		// Wait until the sources on the network have changed
 		NDIlib_find_wait_for_sources(pNDI_find, 1000 /* One second */);
 		last_no_sources = no_sources;
 		p_sources =
 			NDIlib_find_get_current_sources(pNDI_find, &no_sources);
-	} while (no_sources > last_no_sources);
 
-	// No sources found?
-	if (no_sources == 0) {
-		log_file("No sources found!");
-		return 0;
-	}
-
-	int source_index = 0;
-
-	if (strcmp(desired_source_name, "") == 0) {
-		printf("No source name provided. Usage: SyncTestReceive -source=\"<name in () listed above>\"\n");
-		return 0;
-	}
-
-	for (int i = 0; i < no_sources; i++) {
-		const char *src_name = p_sources[i].p_ndi_name;
-		// Exact match
-		if (strcmp(src_name, desired_source_name) == 0) {
-			source_index = i;
-			break;
-		}
-
-		// Also allow matching when the desired name appears enclosed in parentheses
-		// inside the published name, e.g. "Sync Test (red)" -> desired_source_name = "red"
-		if (desired_source_name && desired_source_name[0] != '\0') {
+		source_index = -1;
+		for (int i = 0; i < no_sources; i++) {
+			const char *src_name = p_sources[i].p_ndi_name;
 			std::string pattern =
 				std::string("(") + desired_source_name + ")";
 			if (strstr(src_name, pattern.c_str()) != nullptr) {
@@ -325,8 +312,9 @@ int main(int argc, char *argv[])
 			}
 		}
 	}
+	while (source_index == -1 && high_resolution_clock::now() - start < seconds(duration));
 
-	if (source_index >= no_sources) {
+	if (source_index == -1) {
 		log_file("Source '%s' not found among %u sources!",
 			 desired_source_name, no_sources);
 		return 0;
@@ -363,8 +351,7 @@ int main(int argc, char *argv[])
 	NDIlib_audio_frame_v3_t audio_frame = {0};
 	NDIlib_video_frame_v2_t video_frame = {0};
 	uint64_t last_timestamp = 0LL;
-	// Run for one minute
-	using namespace std::chrono;
+
 	steady_clock::time_point last_report_time = steady_clock::now();
 	for (const auto start = high_resolution_clock::now();
 	     high_resolution_clock::now() - start < seconds(duration);) {
